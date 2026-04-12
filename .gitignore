@@ -1,6 +1,9 @@
 # Секреты
 .env
 api_keys.json
+.vscode/
+*-response.txt
+test-req.json
 
 # Python
 __pycache__/
@@ -12,7 +15,6 @@ venv/
 target/
 *.class
 *.jar
-.mvn/
 .idea/
 *.iml
 

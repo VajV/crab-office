@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: crab-office-backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/craboffice
+    username: crab
+    password: crab_secret
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: changeme
+
+app:
+  ai-service-url: http://localhost:8000
+
+server:
+  port: 8080
+  error:
+    include-message: always
+    include-stacktrace: always
