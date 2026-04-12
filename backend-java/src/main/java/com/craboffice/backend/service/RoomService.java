@@ -17,6 +17,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -110,9 +111,60 @@ public class RoomService {
             }
             return objectMapper.readValue(httpResponse.body(), AiRoomPayload.class);
         } catch (Exception e) {
-            log.error("AI service call failed", e);
-            throw new RuntimeException("Failed to generate room via AI service", e);
+            log.warn("AI service call failed, using local fallback room", e);
+            return buildFallbackRoom(request);
         }
+    }
+
+    private AiRoomPayload buildFallbackRoom(CreateRoomRequest request) {
+        String preset = request.getPreset() == null || request.getPreset().isBlank()
+                ? "tech"
+                : request.getPreset().trim().toLowerCase();
+
+        List<AiRoomPayload.Agent> agents = new ArrayList<>();
+        agents.add(new AiRoomPayload.Agent(
+                "agent-architect-1",
+                "Crab Architect",
+                "architect",
+                new AiRoomPayload.Position(2, 3),
+                "idle"
+        ));
+        agents.add(new AiRoomPayload.Agent(
+                "agent-dev-1",
+                "Crab Developer",
+                "developer",
+                new AiRoomPayload.Position(5, 4),
+                "idle"
+        ));
+        agents.add(new AiRoomPayload.Agent(
+                "agent-analyst-1",
+                "Crab Analyst",
+                "analyst",
+                new AiRoomPayload.Position(8, 2),
+                "idle"
+        ));
+        agents.add(new AiRoomPayload.Agent(
+                "agent-manager-1",
+                "Crab Manager",
+                "manager",
+                new AiRoomPayload.Position(10, 6),
+                "idle"
+        ));
+
+        return new AiRoomPayload(
+                buildFallbackRoomName(preset),
+                preset,
+                new AiRoomPayload.Layout(12, 8, preset),
+                agents
+        );
+    }
+
+    private String buildFallbackRoomName(String preset) {
+        if (preset == null || preset.isBlank()) {
+            return "Fallback Office";
+        }
+        String normalized = preset.substring(0, 1).toUpperCase() + preset.substring(1);
+        return normalized + " Office";
     }
 
     private RoomResponse toResponse(RoomEntity room) {

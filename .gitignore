@@ -24,3 +24,6 @@ node_modules/
 out/
 build/
 .DS_Store
+
+# Sandbox
+crab_sandbox/

@@ -43,7 +43,7 @@ export interface Message {
   id: number;
   roomId: number;
   agentExternalId: string | null;
-  senderType: "USER" | "AGENT";
+  senderType: "USER" | "AGENT" | "SYSTEM";
   content: string;
   createdAt: string;
 }

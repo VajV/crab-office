@@ -55,7 +55,7 @@ public class ChatService {
         MessageEntity entity = MessageEntity.builder()
                 .roomId(agentMsg.getRoomId())
                 .agentExternalId(agentMsg.getAgentExternalId())
-                .senderType("AGENT")
+                .senderType(agentMsg.getSenderType() != null ? agentMsg.getSenderType() : "AGENT")
                 .content(agentMsg.getContent())
                 .createdAt(Instant.now())
                 .build();

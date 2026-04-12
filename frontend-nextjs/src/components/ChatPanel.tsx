@@ -47,12 +47,19 @@ export default function ChatPanel({ roomId, messages }: ChatPanelProps) {
         {messages.map((m) => (
           <div
             key={m.id}
-            className={`text-sm px-3 py-2 rounded-lg max-w-[85%] ${
+            className={`text-sm px-3 py-2 rounded-lg max-w-[85%] whitespace-pre-wrap ${
               m.senderType === "USER"
                 ? "bg-orange-600/20 text-orange-200 ml-auto"
-                : "bg-gray-800 text-gray-200"
+                : m.senderType === "SYSTEM"
+                  ? "bg-indigo-900/30 text-indigo-200 border border-indigo-700/50 mx-auto text-center"
+                  : "bg-gray-800 text-gray-200"
             }`}
           >
+            {m.senderType === "SYSTEM" && (
+              <span className="text-xs text-indigo-400 block mb-1">
+                {m.content.startsWith("🔧") ? "📁 файловая операция" : "⚙️ система"}
+              </span>
+            )}
             {m.senderType === "AGENT" && (
               <span className="text-xs text-gray-400 block mb-0.5">
                 🤖 {m.agentExternalId}

@@ -1,44 +1,18 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import Office from "@/components/Office";
-import ChatPanel from "@/components/ChatPanel";
-import TaskPanel from "@/components/TaskPanel";
-import { useSocket } from "@/hooks/useSocket";
-import type { Room, AgentEvent, Message, Task } from "@/types";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import type { Room } from "@/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-
 const PRESETS = ["tech", "cozy", "creative"] as const;
 
 export default function Home() {
+  const router = useRouter();
   const [prompt, setPrompt] = useState("");
   const [preset, setPreset] = useState<string>("tech");
-  const [room, setRoom] = useState<Room | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-
-  const handleEvent = useCallback((event: AgentEvent) => {
-    setRoom((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        agents: prev.agents.map((a) =>
-          a.externalId === event.agentExternalId
-            ? { ...a, x: event.x, y: event.y, state: event.state }
-            : a
-        ),
-      };
-    });
-  }, []);
-
-  const handleMessage = useCallback((msg: Message) => {
-    setMessages((prev) => [...prev, msg]);
-  }, []);
-
-  useSocket(room?.id ?? null, handleEvent, handleMessage);
 
   const createRoom = async () => {
     if (!prompt.trim()) return;
@@ -50,23 +24,18 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, preset }),
       });
-      if (!res.ok) throw new Error(`Server error: ${res.status}`);
-      const data: Room = await res.json();
-      setRoom(data);
-      // Fetch existing messages
-      setMessages([]);
-      const msgRes = await fetch(`${API_URL}/api/rooms/${data.id}/messages`);
-      if (msgRes.ok) {
-        const msgs: Message[] = await msgRes.json();
-        setMessages(msgs);
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message =
+          payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
+            ? payload.message
+            : payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+              ? payload.error
+              : `Server error: ${res.status}`;
+        throw new Error(message);
       }
-      // Fetch tasks
-      setTasks([]);
-      const taskRes = await fetch(`${API_URL}/api/rooms/${data.id}/tasks`);
-      if (taskRes.ok) {
-        const t: Task[] = await taskRes.json();
-        setTasks(t);
-      }
+      const data = payload as Room;
+      router.push(`/room/${data.id}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
@@ -75,7 +44,7 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center py-12 px-4 gap-8">
+    <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center py-12 px-4 gap-8">
       <h1 className="text-4xl font-bold tracking-tight">🦀 Crab Office</h1>
       <p className="text-gray-400 max-w-md text-center">
         Опишите, какой офис вы хотите построить, и Краб-Архитектор создаст его для вас.
@@ -116,12 +85,6 @@ export default function Home() {
       </div>
 
       {error && <p className="text-red-400 text-sm">{error}</p>}
-
-      {room && <Office room={room} />}
-
-      {room && <ChatPanel roomId={room.id} messages={messages} />}
-
-      {room && <TaskPanel tasks={tasks} />}
     </main>
   );
 }

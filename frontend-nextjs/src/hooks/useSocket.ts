@@ -2,10 +2,9 @@
 
 import { useEffect, useRef } from "react";
 import { Client } from "@stomp/stompjs";
-import SockJS from "sockjs-client";
 import type { AgentEvent, Message } from "@/types";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:8080/ws";
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080/ws";
 
 export function useSocket(
   roomId: number | null,
@@ -21,9 +20,10 @@ export function useSocket(
     if (roomId == null) return;
 
     const client = new Client({
-      webSocketFactory: () => new SockJS(WS_URL) as unknown as WebSocket,
+      brokerURL: WS_URL,
       reconnectDelay: 5000,
       onConnect: () => {
+        console.log("[WS] Connected to", WS_URL, "room", roomId);
         client.subscribe(`/topic/rooms/${roomId}`, (msg) => {
           try {
             const event: AgentEvent = JSON.parse(msg.body);
@@ -40,6 +40,12 @@ export function useSocket(
             // ignore
           }
         });
+      },
+      onStompError: (frame) => {
+        console.error("[WS] STOMP error:", frame.headers["message"], frame.body);
+      },
+      onWebSocketError: (event) => {
+        console.error("[WS] WebSocket error:", event);
       },
     });
 

@@ -1,4 +1,5 @@
-"""Agent brain — listens for user messages, generates agent responses via LLM."""
+"""Agent brain — manager-first delegation: listens for user messages,
+delegates subtasks to specialist agents via LLM."""
 
 from __future__ import annotations
 
@@ -6,12 +7,13 @@ import asyncio
 import json
 import logging
 import os
+import re
 
 import redis.asyncio as aioredis
 from openai import AsyncOpenAI
 
-from agent_prompts import build_system_prompt
-from agent_router import route_message
+from agent_prompts import build_system_prompt, build_delegation_prompt
+from file_tools import TOOL_REGISTRY
 from models import ChatMessage
 
 logger = logging.getLogger(__name__)
@@ -63,8 +65,234 @@ async def _fetch_room_agents(room_id: int) -> list[dict]:
 
 
 async def _pick_responding_agent(agents: list[dict], user_message: str) -> dict | None:
-    """Use the router agent to pick the best responder."""
+    """Use the router agent to pick the best responder (fallback only)."""
+    from agent_router import route_message
     return await route_message(user_message, agents)
+
+
+def _find_manager(agents: list[dict]) -> dict | None:
+    """Find the manager agent in the room."""
+    for a in agents:
+        if a.get("role") == "manager":
+            return a
+    return None
+
+
+def _agent_name_by_id(agents: list[dict], agent_ext_id: str) -> str:
+    """Resolve a human-readable agent name from its external id."""
+    for agent in agents:
+        if agent.get("externalId") == agent_ext_id:
+            return agent.get("name", agent_ext_id)
+    return agent_ext_id
+
+
+def _normalize_subtasks(raw_subtasks: list[dict], agents: list[dict]) -> list[dict]:
+    """Validate manager subtasks and attach a normalized execution order."""
+    agent_ids = {a.get("externalId") for a in agents}
+    valid: list[dict] = []
+
+    for position, subtask in enumerate(raw_subtasks, start=1):
+        if not isinstance(subtask, dict):
+            continue
+
+        agent_ext_id = subtask.get("agentExternalId")
+        task_text = subtask.get("task")
+        if agent_ext_id not in agent_ids:
+            continue
+        if not isinstance(task_text, str) or not task_text.strip():
+            continue
+
+        raw_order = subtask.get("order", position)
+        try:
+            order = int(raw_order)
+        except (TypeError, ValueError):
+            order = position
+        if order < 1:
+            order = position
+
+        valid.append({
+            "agentExternalId": agent_ext_id,
+            "task": task_text.strip(),
+            "order": order,
+            "_position": position,
+        })
+
+    valid.sort(key=lambda st: (st["order"], st["_position"]))
+    for subtask in valid:
+        subtask.pop("_position", None)
+    return valid
+
+
+def _group_subtasks_by_order(subtasks: list[dict]) -> list[tuple[int, list[dict]]]:
+    """Group manager subtasks into execution steps by order."""
+    grouped: list[tuple[int, list[dict]]] = []
+    current_order: int | None = None
+    current_items: list[dict] = []
+
+    for subtask in subtasks:
+        order = subtask["order"]
+        if current_order is None or order != current_order:
+            if current_items:
+                grouped.append((current_order, current_items))
+            current_order = order
+            current_items = [subtask]
+        else:
+            current_items.append(subtask)
+
+    if current_items and current_order is not None:
+        grouped.append((current_order, current_items))
+    return grouped
+
+
+def _build_delegation_summary(subtasks: list[dict], agents: list[dict]) -> str:
+    """Build a readable plan summary for the chat timeline."""
+    task_lines = []
+    for index, subtask in enumerate(subtasks, start=1):
+        agent_name = _agent_name_by_id(agents, subtask["agentExternalId"])
+        task_lines.append(
+            f"{index}. [шаг {subtask['order']}] {agent_name} — {subtask['task']}"
+        )
+
+    step_count = len({subtask["order"] for subtask in subtasks})
+    return (
+        f"📋 Менеджер собрал план: {step_count} шаг(ов), {len(subtasks)} задач."
+        f"\n\n" + "\n".join(task_lines)
+    )
+
+
+def _build_step_status(
+    order: int,
+    step_subtasks: list[dict],
+    agents: list[dict],
+    remaining_steps: list[int],
+) -> str:
+    """Build a SYSTEM status update for the currently active step."""
+    active_names = ", ".join(
+        _agent_name_by_id(agents, subtask["agentExternalId"])
+        for subtask in step_subtasks
+    )
+    detail_lines = [
+        f"- {_agent_name_by_id(agents, subtask['agentExternalId'])}: {subtask['task']}"
+        for subtask in step_subtasks
+    ]
+    queue_text = (
+        "Нет следующих шагов."
+        if not remaining_steps
+        else "В очереди шаги: " + ", ".join(str(step) for step in remaining_steps)
+    )
+    return (
+        f"⏳ Активен шаг {order}. Сейчас работают: {active_names}.\n"
+        f"{queue_text}\n\n" + "\n".join(detail_lines)
+    )
+
+
+async def _manager_delegate(
+    manager: dict,
+    user_message: str,
+    agents: list[dict],
+    room_name: str,
+) -> list[dict]:
+    """Ask the manager to decompose user message into subtasks."""
+    non_manager_agents = [
+        {"externalId": a.get("externalId"), "name": a.get("name"), "role": a.get("role")}
+        for a in agents if a.get("role") != "manager"
+    ]
+
+    prompt = build_delegation_prompt(
+        agents=non_manager_agents,
+        manager_name=manager.get("name", "Manager"),
+        room_name=room_name,
+    )
+
+    try:
+        client = _get_client()
+        model = _get_model()
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.3,
+            max_tokens=512,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        subtasks = json.loads(raw)
+        if not isinstance(subtasks, list):
+            logger.warning("Manager returned non-list: %s", raw)
+            return []
+        return _normalize_subtasks(subtasks, agents)
+    except Exception:
+        logger.exception("Manager delegation LLM call failed")
+        return []
+
+
+async def _publish_message(
+    room_id: int, agent_ext_id: str | None, sender_type: str, content: str
+) -> None:
+    """Publish a message to the outbound Redis channel."""
+    outbound = {
+        "roomId": room_id,
+        "agentExternalId": agent_ext_id,
+        "senderType": sender_type,
+        "content": content,
+    }
+    r = _get_redis()
+    await r.publish(REDIS_OUTBOUND, json.dumps(outbound))
+    await r.aclose()
+
+
+TOOL_PATTERN = re.compile(
+    r"CALL_TOOL:\s*(\w+)\s*(\{.*?\})",
+    re.DOTALL,
+)
+
+
+async def _execute_tools(
+    reply_text: str, room_id: int, agent: dict,
+) -> tuple[str, list[str]]:
+    """Parse CALL_TOOL blocks, execute tools, return (clean_text, notifications)."""
+    notifications: list[str] = []
+    agent_role = agent.get("role", "")
+    agent_name = agent.get("name", "Agent")
+    agent_ext_id = agent.get("externalId", "unknown")
+
+    def replacer(match: re.Match) -> str:
+        tool_name = match.group(1)
+        raw_json = match.group(2)
+
+        if tool_name not in TOOL_REGISTRY:
+            msg = f"⚠️ Неизвестный инструмент: {tool_name}"
+            notifications.append(msg)
+            return msg
+
+        func, required_params, allowed_roles = TOOL_REGISTRY[tool_name]
+        if agent_role not in allowed_roles:
+            msg = f"⚠️ {agent_name} не имеет доступа к {tool_name}"
+            notifications.append(msg)
+            return msg
+
+        try:
+            params = json.loads(raw_json)
+        except json.JSONDecodeError:
+            msg = f"⚠️ Невалидный JSON для {tool_name}"
+            notifications.append(msg)
+            return msg
+
+        for p in required_params:
+            if p not in params:
+                msg = f"⚠️ Отсутствует параметр '{p}' для {tool_name}"
+                notifications.append(msg)
+                return msg
+
+        result = func(room_id, **params)
+        notifications.append(f"🔧 {agent_name} ({agent_ext_id}): {result}")
+        return ""
+
+    clean = TOOL_PATTERN.sub(replacer, reply_text).strip()
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, notifications
 
 
 async def _generate_agent_reply(
@@ -106,8 +334,35 @@ async def _generate_agent_reply(
         return "Sorry, I'm having trouble thinking right now. Try again in a moment."
 
 
+async def _process_subtask(
+    agent: dict, task_text: str, original_message: str, room_id: int, room_name: str,
+) -> None:
+    """Process a single subtask for a specific agent."""
+    # Give agent both original context and the manager's specific task
+    combined = (
+        f"Исходное сообщение пользователя: {original_message}\n\n"
+        f"Твоя задача от менеджера: {task_text}"
+    )
+    reply = await _generate_agent_reply(agent, combined, room_name)
+    if reply.strip() == "[SKIP]":
+        logger.debug("Agent %s skipped subtask in room %d", agent.get("name"), room_id)
+        return
+
+    # Execute any CALL_TOOL blocks in the reply
+    clean_reply, notifications = await _execute_tools(reply, room_id, agent)
+
+    # Publish tool notifications as SYSTEM messages
+    for note in notifications:
+        await _publish_message(room_id, agent.get("externalId", "unknown"), "SYSTEM", note)
+
+    # Publish the cleaned agent reply (if anything remains)
+    if clean_reply:
+        await _publish_message(room_id, agent.get("externalId", "unknown"), "AGENT", clean_reply)
+    logger.info("Agent %s completed subtask in room %d", agent.get("name"), room_id)
+
+
 async def handle_inbound_message(raw_data: str) -> None:
-    """Process a single inbound user message."""
+    """Process a single inbound user message using manager delegation."""
     try:
         msg = json.loads(raw_data)
         chat_msg = ChatMessage(**msg)
@@ -124,28 +379,70 @@ async def handle_inbound_message(raw_data: str) -> None:
         logger.warning("No agents found for room %d", room_id)
         return
 
-    agent = await _pick_responding_agent(agents, chat_msg.content)
-    if not agent:
+    room_name = f"Room {room_id}"
+    manager = _find_manager(agents)
+
+    if not manager:
+        # Fallback: no manager in room — use old single-agent routing
+        logger.warning("No manager in room %d, falling back to router", room_id)
+        agent = await _pick_responding_agent(agents, chat_msg.content)
+        if not agent:
+            return
+        reply = await _generate_agent_reply(agent, chat_msg.content, room_name)
+        if reply.strip() != "[SKIP]":
+            clean_reply, notifications = await _execute_tools(reply, room_id, agent)
+            for note in notifications:
+                await _publish_message(room_id, agent.get("externalId", "unknown"), "SYSTEM", note)
+            if clean_reply:
+                await _publish_message(room_id, agent.get("externalId", "unknown"), "AGENT", clean_reply)
         return
 
-    reply_text = await _generate_agent_reply(
-        agent=agent,
-        user_message=chat_msg.content,
-        room_name=f"Room {room_id}",
-    )
+    # --- Manager-first delegation flow ---
 
-    # Build outbound message
-    outbound = {
-        "roomId": room_id,
-        "agentExternalId": agent.get("externalId", "unknown"),
-        "senderType": "AGENT",
-        "content": reply_text,
-    }
+    # Step 1: Manager decomposes into subtasks
+    subtasks = await _manager_delegate(manager, chat_msg.content, agents, room_name)
 
-    r = _get_redis()
-    await r.publish(REDIS_OUTBOUND, json.dumps(outbound))
-    await r.aclose()
-    logger.info("Agent %s replied in room %d", agent.get("name"), room_id)
+    if not subtasks:
+        # Manager couldn't delegate — have manager respond directly
+        logger.info("Manager produced no subtasks, responding directly")
+        reply = await _generate_agent_reply(manager, chat_msg.content, room_name)
+        if reply.strip() != "[SKIP]":
+            await _publish_message(room_id, manager.get("externalId", "unknown"), "AGENT", reply)
+        return
+
+    # Step 2: Announce delegation via SYSTEM message
+    delegation_text = _build_delegation_summary(subtasks, agents)
+    await _publish_message(room_id, manager.get("externalId"), "SYSTEM", delegation_text)
+    logger.info("Manager delegated %d subtasks in room %d", len(subtasks), room_id)
+
+    # Step 3: Execute subtasks step-by-step by manager order.
+    agent_map = {a.get("externalId"): a for a in agents}
+    step_groups = _group_subtasks_by_order(subtasks)
+
+    for index, (order, step_subtasks) in enumerate(step_groups):
+        remaining_steps = [step_order for step_order, _ in step_groups[index + 1:]]
+        step_status = _build_step_status(order, step_subtasks, agents, remaining_steps)
+        await _publish_message(room_id, manager.get("externalId"), "SYSTEM", step_status)
+
+        coros = []
+        for subtask in step_subtasks:
+            agent = agent_map.get(subtask["agentExternalId"])
+            if agent:
+                coros.append(
+                    _process_subtask(agent, subtask["task"], chat_msg.content, room_id, room_name)
+                )
+
+        if coros:
+            await asyncio.gather(*coros)
+
+        await _publish_message(
+            room_id,
+            manager.get("externalId"),
+            "SYSTEM",
+            f"✅ Шаг {order} завершен.",
+        )
+
+    logger.info("All %d subtasks completed for room %d", len(subtasks), room_id)
 
 
 async def brain_loop() -> None:
