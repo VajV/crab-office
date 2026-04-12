@@ -1,0 +1,24 @@
+# Секреты
+.env
+api_keys.json
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Java
+target/
+*.class
+*.jar
+.mvn/
+.idea/
+*.iml
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+.DS_Store
