@@ -58,3 +58,21 @@ export interface Task {
   createdAt: string;
   updatedAt: string | null;
 }
+
+export interface SandboxFileEntry {
+  path: string;
+  name: string;
+  size: number;
+}
+
+export interface SandboxFileListResponse {
+  roomId: number;
+  files: SandboxFileEntry[];
+}
+
+export interface SandboxFileContentResponse {
+  roomId: number;
+  path: string;
+  content: string;
+  size: number;
+}

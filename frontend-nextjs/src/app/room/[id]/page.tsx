@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Office from "@/components/Office";
 import ChatPanel from "@/components/ChatPanel";
-import TaskPanel from "@/components/TaskPanel";
+import WorkbenchPanel from "@/components/WorkbenchPanel";
 import { useSocket } from "@/hooks/useSocket";
-import type { Room, AgentEvent, Message, Task } from "@/types";
+import type { Room, AgentEvent, Message, Task, SandboxFileEntry, SandboxFileListResponse, SandboxFileContentResponse } from "@/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -17,6 +17,11 @@ export default function RoomPage() {
   const [room, setRoom] = useState<Room | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [files, setFiles] = useState<SandboxFileEntry[]>([]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState("");
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +62,41 @@ export default function RoomPage() {
     return () => { cancelled = true; };
   }, [roomId]);
 
+  const loadFiles = useCallback(async () => {
+    if (!roomId || isNaN(roomId)) return;
+    setFilesLoading(true);
+    setFilesError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/rooms/${roomId}/files`);
+      if (!res.ok) throw new Error(`Files unavailable (${res.status})`);
+      const data: SandboxFileListResponse = await res.json();
+      setFiles(data.files);
+    } catch (e) {
+      setFilesError(e instanceof Error ? e.message : "Failed to load files");
+    } finally {
+      setFilesLoading(false);
+    }
+  }, [roomId]);
+
+  const handleSelectFile = useCallback(async (path: string) => {
+    setSelectedPath(path);
+    setFilesLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/rooms/${roomId}/files/content?path=${encodeURIComponent(path)}`);
+      if (!res.ok) throw new Error(`Cannot read file (${res.status})`);
+      const data: SandboxFileContentResponse = await res.json();
+      setFileContent(data.content);
+    } catch {
+      setFileContent("Ошибка загрузки файла");
+    } finally {
+      setFilesLoading(false);
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    if (roomId && !isNaN(roomId)) loadFiles();
+  }, [roomId, loadFiles]);
+
   const handleEvent = useCallback((event: AgentEvent) => {
     setRoom((prev) => {
       if (!prev) return prev;
@@ -73,7 +113,10 @@ export default function RoomPage() {
 
   const handleMessage = useCallback((msg: Message) => {
     setMessages((prev) => [...prev, msg]);
-  }, []);
+    if (msg.senderType === "SYSTEM" && msg.content.startsWith("🔧")) {
+      loadFiles();
+    }
+  }, [loadFiles]);
 
   useSocket(room?.id ?? null, handleEvent, handleMessage);
 
@@ -99,7 +142,16 @@ export default function RoomPage() {
       <a href="/" className="text-sm text-gray-500 hover:text-gray-300 self-start">← Все комнаты</a>
       <Office room={room} />
       <ChatPanel roomId={room.id} messages={messages} />
-      <TaskPanel tasks={tasks} />
+      <WorkbenchPanel
+        tasks={tasks}
+        files={files}
+        selectedPath={selectedPath}
+        fileContent={fileContent}
+        filesLoading={filesLoading}
+        filesError={filesError}
+        onSelectFile={handleSelectFile}
+        onRefreshFiles={loadFiles}
+      />
     </main>
   );
 }
