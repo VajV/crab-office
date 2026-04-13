@@ -76,3 +76,14 @@ export interface SandboxFileContentResponse {
   content: string;
   size: number;
 }
+
+export interface ContainerEvent {
+  roomId: number;
+  status: "creating" | "running" | "stopped" | "error";
+  command: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  timestamp: string;
+}

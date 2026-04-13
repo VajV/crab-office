@@ -6,7 +6,7 @@ import Office from "@/components/Office";
 import ChatPanel from "@/components/ChatPanel";
 import WorkbenchPanel from "@/components/WorkbenchPanel";
 import { useSocket } from "@/hooks/useSocket";
-import type { Room, AgentEvent, Message, Task, SandboxFileEntry, SandboxFileListResponse, SandboxFileContentResponse } from "@/types";
+import type { Room, AgentEvent, Message, Task, SandboxFileEntry, SandboxFileListResponse, SandboxFileContentResponse, ContainerEvent } from "@/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -24,6 +24,7 @@ export default function RoomPage() {
   const [filesError, setFilesError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [containerLogs, setContainerLogs] = useState<ContainerEvent[]>([]);
 
   useEffect(() => {
     if (!roomId || isNaN(roomId)) {
@@ -42,14 +43,16 @@ export default function RoomPage() {
         if (cancelled) return;
         setRoom(roomData);
 
-        const [msgRes, taskRes] = await Promise.all([
+        const [msgRes, taskRes, containerRes] = await Promise.all([
           fetch(`${API_URL}/api/rooms/${roomId}/messages`),
           fetch(`${API_URL}/api/rooms/${roomId}/tasks`),
+          fetch(`${API_URL}/api/rooms/${roomId}/container/logs`),
         ]);
 
         if (!cancelled) {
           if (msgRes.ok) setMessages(await msgRes.json());
           if (taskRes.ok) setTasks(await taskRes.json());
+          if (containerRes.ok) setContainerLogs(await containerRes.json());
         }
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load room");
@@ -118,7 +121,11 @@ export default function RoomPage() {
     }
   }, [loadFiles]);
 
-  useSocket(room?.id ?? null, handleEvent, handleMessage);
+  const handleContainerEvent = useCallback((event: ContainerEvent) => {
+    setContainerLogs((prev) => [...prev, event]);
+  }, []);
+
+  useSocket(room?.id ?? null, handleEvent, handleMessage, handleContainerEvent);
 
   if (loading) {
     return (
@@ -149,6 +156,7 @@ export default function RoomPage() {
         fileContent={fileContent}
         filesLoading={filesLoading}
         filesError={filesError}
+        containerLogs={containerLogs}
         onSelectFile={handleSelectFile}
         onRefreshFiles={loadFiles}
       />

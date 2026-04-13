@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import type { Task, SandboxFileEntry } from "@/types";
+import { useState, useEffect, useRef } from "react";
+import type { Task, SandboxFileEntry, ContainerEvent } from "@/types";
 import FilesPanel from "./FilesPanel";
+import TerminalPanel from "./TerminalPanel";
 
 const statusColors: Record<string, string> = {
   PENDING: "bg-gray-600",
@@ -18,7 +19,7 @@ const statusLabels: Record<string, string> = {
   FAILED: "❌ Ошибка",
 };
 
-type Tab = "tasks" | "files";
+type Tab = "tasks" | "files" | "terminal";
 
 interface WorkbenchPanelProps {
   tasks: Task[];
@@ -27,6 +28,7 @@ interface WorkbenchPanelProps {
   fileContent: string;
   filesLoading: boolean;
   filesError: string | null;
+  containerLogs: ContainerEvent[];
   onSelectFile: (path: string) => void;
   onRefreshFiles: () => void;
 }
@@ -38,10 +40,27 @@ export default function WorkbenchPanel({
   fileContent,
   filesLoading,
   filesError,
+  containerLogs,
   onSelectFile,
   onRefreshFiles,
 }: WorkbenchPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("tasks");
+  const prevLogsLen = useRef(containerLogs.length);
+  const [newLogCount, setNewLogCount] = useState(0);
+
+  // Auto-switch to terminal on error, track new log badge count
+  useEffect(() => {
+    if (containerLogs.length > prevLogsLen.current) {
+      const newest = containerLogs[containerLogs.length - 1];
+      if (newest.status === "error") {
+        setActiveTab("terminal");
+        setNewLogCount(0);
+      } else if (activeTab !== "terminal") {
+        setNewLogCount((c) => c + (containerLogs.length - prevLogsLen.current));
+      }
+    }
+    prevLogsLen.current = containerLogs.length;
+  }, [containerLogs, activeTab]);
 
   return (
     <div className="w-full max-w-lg bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
@@ -66,6 +85,24 @@ export default function WorkbenchPanel({
           }`}
         >
           📁 Файлы
+        </button>
+        <button
+          onClick={() => { setActiveTab("terminal"); setNewLogCount(0); }}
+          className={`flex-1 px-3 py-2 text-sm font-medium relative ${
+            activeTab === "terminal"
+              ? "text-orange-400 border-b-2 border-orange-400"
+              : "text-gray-400 hover:text-gray-200"
+          }`}
+        >
+          🖥️ Терминал
+          {containerLogs.some((l) => l.status === "running") && (
+            <span className="ml-1 inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+          )}
+          {newLogCount > 0 && activeTab !== "terminal" && (
+            <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+              {newLogCount}
+            </span>
+          )}
         </button>
       </div>
 
@@ -106,6 +143,10 @@ export default function WorkbenchPanel({
           onSelect={onSelectFile}
           onRefresh={onRefreshFiles}
         />
+      )}
+
+      {activeTab === "terminal" && (
+        <TerminalPanel logs={containerLogs} />
       )}
     </div>
   );

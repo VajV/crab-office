@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Client } from "@stomp/stompjs";
-import type { AgentEvent, Message } from "@/types";
+import type { AgentEvent, Message, ContainerEvent } from "@/types";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080/ws";
 
@@ -10,11 +10,14 @@ export function useSocket(
   roomId: number | null,
   onEvent: (event: AgentEvent) => void,
   onMessage?: (msg: Message) => void,
+  onContainerEvent?: (event: ContainerEvent) => void,
 ) {
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
+  const onContainerRef = useRef(onContainerEvent);
+  onContainerRef.current = onContainerEvent;
 
   useEffect(() => {
     if (roomId == null) return;
@@ -36,6 +39,14 @@ export function useSocket(
           try {
             const parsed: Message = JSON.parse(msg.body);
             onMessageRef.current?.(parsed);
+          } catch {
+            // ignore
+          }
+        });
+        client.subscribe(`/topic/rooms/${roomId}/container`, (msg) => {
+          try {
+            const parsed: ContainerEvent = JSON.parse(msg.body);
+            onContainerRef.current?.(parsed);
           } catch {
             // ignore
           }
