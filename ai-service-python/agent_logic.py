@@ -60,7 +60,8 @@ async def move_agent(
         agentExternalId=agent_external_id,
         eventType="AGENT_STATE_CHANGED",
         state=target_state,
-        position=new_position,
+        x=new_position.x,
+        y=new_position.y,
         message=message or f"{agent_external_id} transitioned to {target_state}",
         timestamp=datetime.now(timezone.utc).isoformat(),
     )

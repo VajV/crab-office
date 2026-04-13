@@ -41,7 +41,8 @@ class AgentEvent(BaseModel):
     agentExternalId: str
     eventType: str
     state: str
-    position: Position
+    x: int
+    y: int
     message: str
     timestamp: str
 
@@ -60,3 +61,21 @@ class AgentResponse(BaseModel):
     text: str
     action: str | None = None
     actionParams: dict | None = None
+
+
+class SandboxFileEntry(BaseModel):
+    path: str
+    name: str
+    size: int
+
+
+class SandboxFileListResponse(BaseModel):
+    roomId: int
+    files: list[SandboxFileEntry]
+
+
+class SandboxFileContentResponse(BaseModel):
+    roomId: int
+    path: str
+    content: str
+    size: int
