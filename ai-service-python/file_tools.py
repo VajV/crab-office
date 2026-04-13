@@ -107,8 +107,33 @@ def read_file_payload(room_id: int, path: str) -> dict:
 
 
 # Registry: tool name → (function, required_params, allowed_roles)
+# Functions may be sync (return str) or async (return Awaitable[str]).
 TOOL_REGISTRY: dict[str, tuple] = {
     "write_file": (write_file, ["path", "content"], {"developer", "architect"}),
     "read_file": (read_file, ["path"], {"analyst", "developer", "architect"}),
     "list_files": (list_files, [], {"architect", "developer", "analyst", "manager"}),
+    "run_code": (None, ["command"], {"developer", "architect"}),  # set below
 }
+
+
+async def run_code(room_id: int, command: str) -> str:
+    """Execute a command inside the room's Docker container."""
+    from container_manager import get_container_manager
+
+    mgr = get_container_manager()
+    try:
+        result = await mgr.exec_command(room_id, command)
+    except Exception as e:
+        logger.exception("run_code failed for room %d", room_id)
+        return f"❌ Ошибка выполнения: {e}"
+
+    if result.timed_out:
+        return f"⏱️ Таймаут: команда не завершилась за {result.exit_code}с"
+
+    icon = "✅" if result.exit_code == 0 else "❌"
+    output = result.stdout.strip() or "(нет вывода)"
+    return f"{icon} exit code {result.exit_code}\n```\n$ {command}\n{output}\n```"
+
+
+# Wire run_code into the registry (needs to be after the function definition)
+TOOL_REGISTRY["run_code"] = (run_code, ["command"], {"developer", "architect"})

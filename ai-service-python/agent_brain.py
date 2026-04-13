@@ -252,45 +252,64 @@ TOOL_PATTERN = re.compile(
 async def _execute_tools(
     reply_text: str, room_id: int, agent: dict,
 ) -> tuple[str, list[str]]:
-    """Parse CALL_TOOL blocks, execute tools, return (clean_text, notifications)."""
+    """Parse CALL_TOOL blocks, execute tools (sync or async), return (clean_text, notifications)."""
     notifications: list[str] = []
     agent_role = agent.get("role", "")
     agent_name = agent.get("name", "Agent")
     agent_ext_id = agent.get("externalId", "unknown")
 
-    def replacer(match: re.Match) -> str:
+    # Collect all tool matches first so we can await async tools
+    matches = list(TOOL_PATTERN.finditer(reply_text))
+    if not matches:
+        return reply_text, notifications
+
+    replacements: list[tuple[int, int, str]] = []
+    for match in matches:
         tool_name = match.group(1)
         raw_json = match.group(2)
 
         if tool_name not in TOOL_REGISTRY:
             msg = f"⚠️ Неизвестный инструмент: {tool_name}"
             notifications.append(msg)
-            return msg
+            replacements.append((match.start(), match.end(), msg))
+            continue
 
         func, required_params, allowed_roles = TOOL_REGISTRY[tool_name]
         if agent_role not in allowed_roles:
             msg = f"⚠️ {agent_name} не имеет доступа к {tool_name}"
             notifications.append(msg)
-            return msg
+            replacements.append((match.start(), match.end(), msg))
+            continue
 
         try:
             params = json.loads(raw_json)
         except json.JSONDecodeError:
             msg = f"⚠️ Невалидный JSON для {tool_name}"
             notifications.append(msg)
-            return msg
+            replacements.append((match.start(), match.end(), msg))
+            continue
 
         for p in required_params:
             if p not in params:
                 msg = f"⚠️ Отсутствует параметр '{p}' для {tool_name}"
                 notifications.append(msg)
-                return msg
+                replacements.append((match.start(), match.end(), msg))
+                break
+        else:
+            # All params present — execute tool
+            import inspect
+            if inspect.iscoroutinefunction(func):
+                result = await func(room_id, **params)
+            else:
+                result = func(room_id, **params)
+            notifications.append(f"🔧 {agent_name} ({agent_ext_id}): {result}")
+            replacements.append((match.start(), match.end(), ""))
 
-        result = func(room_id, **params)
-        notifications.append(f"🔧 {agent_name} ({agent_ext_id}): {result}")
-        return ""
+    # Apply replacements in reverse order to preserve offsets
+    clean = reply_text
+    for start, end, replacement in reversed(replacements):
+        clean = clean[:start] + replacement + clean[end:]
 
-    clean = TOOL_PATTERN.sub(replacer, reply_text).strip()
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
     return clean, notifications
 

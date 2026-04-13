@@ -79,3 +79,14 @@ class SandboxFileContentResponse(BaseModel):
     path: str
     content: str
     size: int
+
+
+class ContainerEvent(BaseModel):
+    roomId: int
+    status: str  # creating | running | stopped | error
+    command: str = ""
+    exitCode: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    timedOut: bool = False
+    timestamp: str = ""

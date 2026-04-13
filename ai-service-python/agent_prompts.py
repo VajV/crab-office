@@ -65,18 +65,24 @@ BASE_CONTEXT = (
 
 TOOLS_PROMPT_DEVELOPER = (
     "\n\nTOOLS AVAILABLE:\n"
-    "You can create and read files in a sandboxed workspace. To use a tool, include the following "
+    "You can create, read files, and EXECUTE CODE in a sandboxed workspace. To use a tool, include the following "
     "pattern EXACTLY in your response (on its own line):\n\n"
     "CALL_TOOL: write_file {\"path\": \"example.py\", \"content\": \"print('hello')\"}\n"
     "CALL_TOOL: read_file {\"path\": \"example.py\"}\n"
-    "CALL_TOOL: list_files {}\n\n"
+    "CALL_TOOL: list_files {}\n"
+    "CALL_TOOL: run_code {\"command\": \"python example.py\"}\n\n"
     "RULES for tools:\n"
     "- path is relative to the room sandbox (no leading / or ..)\n"
     "- write_file: creates or overwrites a file (max 100 KB)\n"
     "- read_file: returns file content\n"
     "- list_files: lists all files in the sandbox\n"
+    "- run_code: executes a command inside a Docker container (timeout 30s)\n"
     "- You can include multiple CALL_TOOL lines in one response\n"
-    "- Write regular text BEFORE or AFTER tool calls to explain what you did"
+    "- Write regular text BEFORE or AFTER tool calls to explain what you did\n"
+    "- NEVER use pip install — all libraries are pre-installed\n\n"
+    "PRE-INSTALLED LIBRARIES (no pip install needed):\n"
+    "Python: requests, httpx, beautifulsoup4 (bs4), lxml, pandas, numpy, pyyaml, toml, python-dotenv, pytest\n"
+    "Node.js: npm is available, but prefer Python for scripts"
 )
 
 TOOLS_PROMPT_ARCHITECT = TOOLS_PROMPT_DEVELOPER  # same tools
