@@ -9,13 +9,16 @@ never block the FastAPI event loop.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import docker
+import redis as sync_redis
 from docker.errors import NotFound
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,8 @@ SANDBOX_ROOT = Path(__file__).resolve().parent.parent / "crab_sandbox"
 MAX_CONTAINERS = int(os.getenv("CRAB_MAX_CONTAINERS", "5"))
 EXEC_TIMEOUT = int(os.getenv("CRAB_EXEC_TIMEOUT", "30"))
 IDLE_TIMEOUT = int(os.getenv("CRAB_IDLE_TIMEOUT", "600"))  # 10 min
+REDIS_CONTAINER_EVENTS = "crab:container-events"
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
 @dataclass
@@ -49,6 +54,40 @@ class ContainerManager:
     def __init__(self, client: docker.DockerClient | None = None):
         self._client = client or docker.from_env()
         self._containers: dict[int, _ContainerInfo] = {}
+        self._redis: sync_redis.Redis | None = None
+
+    def _get_redis(self) -> sync_redis.Redis:
+        if self._redis is None:
+            self._redis = sync_redis.from_url(REDIS_URL)
+        return self._redis
+
+    def _publish_event(
+        self,
+        room_id: int,
+        status: str,
+        command: str = "",
+        exit_code: int | None = None,
+        stdout: str = "",
+        stderr: str = "",
+        timed_out: bool = False,
+    ) -> None:
+        """Publish a container event to Redis."""
+        event = {
+            "roomId": room_id,
+            "status": status,
+            "command": command,
+            "exitCode": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timedOut": timed_out,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            self._get_redis().publish(
+                REDIS_CONTAINER_EVENTS, json.dumps(event)
+            )
+        except Exception:
+            logger.warning("Failed to publish container event", exc_info=True)
 
     # ── public async API ──────────────────────────────────────────
 
@@ -101,6 +140,8 @@ class ContainerManager:
         except NotFound:
             pass
 
+        self._publish_event(room_id, "creating")
+
         ct = self._client.containers.run(
             image=IMAGE_NAME,
             name=container_name,
@@ -137,6 +178,8 @@ class ContainerManager:
         if info:
             info.last_used = time.time()
 
+        self._publish_event(room_id, "running", command=command)
+
         exec_handle = self._client.api.exec_create(
             ct.id,
             ["sh", "-c", command],
@@ -157,11 +200,27 @@ class ContainerManager:
         if len(stdout_text) > max_output:
             stdout_text = stdout_text[:max_output] + "\n... (output truncated)"
 
-        return ExecResult(
+        result = ExecResult(
             exit_code=exit_code,
             stdout=stdout_text,
             stderr="",
             timed_out=False,
+        )
+        self._publish_exec_result(room_id, command, result)
+        return result
+
+    def _publish_exec_result(
+        self, room_id: int, command: str, result: ExecResult
+    ) -> None:
+        status = "stopped" if result.exit_code == 0 else "error"
+        self._publish_event(
+            room_id,
+            status,
+            command=command,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            timed_out=result.timed_out,
         )
 
     def _stop_sync(self, room_id: int) -> None:
