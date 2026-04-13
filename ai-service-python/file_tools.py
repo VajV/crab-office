@@ -80,6 +80,32 @@ def list_files(room_id: int) -> str:
     return "\n".join(lines)
 
 
+def list_files_structured(room_id: int) -> list[dict]:
+    """Return structured file metadata for the room sandbox."""
+    room_dir = _sandbox_path(room_id)
+    files = [f for f in sorted(room_dir.rglob("*")) if f.is_file()]
+    return [
+        {
+            "path": str(f.relative_to(room_dir)).replace("\\", "/"),
+            "name": f.name,
+            "size": f.stat().st_size,
+        }
+        for f in files
+    ]
+
+
+def read_file_payload(room_id: int, path: str) -> dict:
+    """Return file content and metadata for the given path."""
+    target = _safe_resolve(room_id, path)
+    if not target.exists():
+        raise FileNotFoundError(path)
+    return {
+        "path": path,
+        "content": target.read_text(encoding="utf-8"),
+        "size": target.stat().st_size,
+    }
+
+
 # Registry: tool name → (function, required_params, allowed_roles)
 TOOL_REGISTRY: dict[str, tuple] = {
     "write_file": (write_file, ["path", "content"], {"developer", "architect"}),

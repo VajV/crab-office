@@ -13,7 +13,15 @@ from fastapi import FastAPI, HTTPException
 from agent_brain import brain_loop
 from agent_logic import move_agent
 from architect import generate_room, get_llm_status
-from models import AgentEvent, GenerateRequest, Position, RoomOut
+from file_tools import list_files_structured, read_file_payload
+from models import (
+    AgentEvent,
+    GenerateRequest,
+    Position,
+    RoomOut,
+    SandboxFileContentResponse,
+    SandboxFileListResponse,
+)
 from telegram_bot import run_telegram_bot
 
 load_dotenv(Path(__file__).resolve().with_name(".env"))
@@ -73,3 +81,19 @@ async def agent_event(
     if result is None:
         raise HTTPException(status_code=400, detail=f"Invalid transition {current_state} -> {target_state}")
     return result
+
+
+@app.get("/rooms/{room_id}/files", response_model=SandboxFileListResponse)
+async def list_room_files(room_id: int):
+    return SandboxFileListResponse(roomId=room_id, files=list_files_structured(room_id))
+
+
+@app.get("/rooms/{room_id}/files/content", response_model=SandboxFileContentResponse)
+async def read_room_file(room_id: int, path: str):
+    try:
+        payload = read_file_payload(room_id, path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return SandboxFileContentResponse(roomId=room_id, **payload)
