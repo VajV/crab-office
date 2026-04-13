@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prebaked libraries — container has NO internet (network: internal).
+# Agents must know these packages are pre-installed.
+RUN pip install --no-cache-dir \
+    requests httpx beautifulsoup4 lxml \
+    pandas numpy \
+    pyyaml toml python-dotenv \
+    pytest
+
+WORKDIR /app/workspace
+
+RUN groupadd -g 1000 crab && useradd -u 1000 -g crab -m crab
+USER 1000
