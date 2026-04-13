@@ -3,7 +3,7 @@ spring:
     name: crab-office-backend
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/craboffice
+    url: jdbc:postgresql://localhost:5433/craboffice
     username: crab
     password: crab_secret
 
@@ -16,7 +16,6 @@ spring:
     redis:
       host: localhost
       port: 6379
-      password: changeme
 
 app:
   ai-service-url: http://localhost:8000

@@ -27,3 +27,6 @@ build/
 
 # Sandbox
 crab_sandbox/
+
+# Local worktrees
+.worktrees/
