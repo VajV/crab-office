@@ -1,30 +1,41 @@
 package com.craboffice.backend.service;
 
+import com.craboffice.backend.dto.AgentEventDto;
 import com.craboffice.backend.dto.MessageDto;
 import com.craboffice.backend.dto.SendMessageRequest;
+import com.craboffice.backend.entity.AgentEntity;
 import com.craboffice.backend.entity.MessageEntity;
+import com.craboffice.backend.entity.RoomEntity;
 import com.craboffice.backend.repository.MessageRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
+import com.craboffice.backend.repository.RoomRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class ChatService {
 
     private final MessageRepository messageRepository;
     private final SimpMessagingTemplate messagingTemplate;
-    private final StringRedisTemplate redisTemplate;
-    private final ObjectMapper objectMapper;
+    private final OpenClawService openClawService;
+    private final RoomRepository roomRepository;
 
-    private static final String REDIS_CHAT_CHANNEL = "crab:chat-inbound";
+    public ChatService(MessageRepository messageRepository,
+                       SimpMessagingTemplate messagingTemplate,
+                       OpenClawService openClawService,
+                       RoomRepository roomRepository) {
+        this.messageRepository = messageRepository;
+        this.messagingTemplate = messagingTemplate;
+        this.openClawService = openClawService;
+        this.roomRepository = roomRepository;
+    }
 
     public MessageDto sendUserMessage(Long roomId, SendMessageRequest request) {
         MessageEntity entity = MessageEntity.builder()
@@ -40,15 +51,96 @@ public class ChatService {
         // Notify frontend via WebSocket
         messagingTemplate.convertAndSend("/topic/rooms/" + roomId + "/chat", dto);
 
-        // Publish to Redis for the Python agent brain
-        try {
-            String json = objectMapper.writeValueAsString(dto);
-            redisTemplate.convertAndSend(REDIS_CHAT_CHANNEL, json);
-        } catch (Exception e) {
-            log.error("Failed to publish message to Redis", e);
-        }
+        // Dispatch to OpenClaw in background
+        dispatchToOpenClaw(roomId, request.getContent());
 
         return dto;
+    }
+
+    @Async
+    public void dispatchToOpenClaw(Long roomId, String userMessage) {
+        try {
+            List<MessageDto> history = getMessages(roomId);
+
+            // Load room with agents to build context
+            RoomEntity room = roomRepository.findWithAgentsById(roomId).orElse(null);
+
+            String systemPrompt = null;
+            String managerExternalId = null;
+            AgentEntity manager = null;
+
+            if (room != null && !room.getAgents().isEmpty()) {
+                String agentDescriptions = room.getAgents().stream()
+                        .map(a -> a.getName() + " (" + a.getRole() + ")")
+                        .collect(Collectors.joining(", "));
+
+                systemPrompt = "Ты — менеджер офиса '" + room.getRoomName() + "'. " +
+                        "В комнате работают агенты: " + agentDescriptions + ". " +
+                        "Отвечай на вопросы пользователя, координируй работу агентов.";
+
+                // Find manager agent or fall back to first agent
+                manager = room.getAgents().stream()
+                        .filter(a -> a.getRole() != null && a.getRole().toLowerCase().contains("manager"))
+                        .findFirst()
+                        .orElse(room.getAgents().get(0));
+                managerExternalId = manager.getExternalId();
+
+                // Agent starts working — move toward center
+                broadcastAgentEvent(roomId, manager, "working",
+                        clamp(manager.getPosX() + randomStep(), 0, room.getLayoutWidth() - 1),
+                        clamp(manager.getPosY() + randomStep(), 0, room.getLayoutHeight() - 1));
+            }
+
+            String reply = openClawService.chatViaProxy(roomId, managerExternalId, history, userMessage, systemPrompt);
+
+            if (reply != null && !reply.isBlank()) {
+                // Agent is typing the response
+                if (manager != null) {
+                    broadcastAgentEvent(roomId, manager, "typing", manager.getPosX(), manager.getPosY());
+                }
+
+                MessageDto agentMsg = MessageDto.builder()
+                        .roomId(roomId)
+                        .senderType("AGENT")
+                        .agentExternalId(managerExternalId)
+                        .content(reply)
+                        .build();
+                saveAndBroadcastAgentMessage(agentMsg);
+
+                // Agent returns to idle at original position
+                if (manager != null) {
+                    broadcastAgentEvent(roomId, manager, "idle", manager.getPosX(), manager.getPosY());
+                }
+            } else {
+                log.warn("OpenClaw returned empty response for room {}", roomId);
+                if (manager != null) {
+                    broadcastAgentEvent(roomId, manager, "idle", manager.getPosX(), manager.getPosY());
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to dispatch to OpenClaw for room {}", roomId, e);
+        }
+    }
+
+    private void broadcastAgentEvent(Long roomId, AgentEntity agent, String state, int x, int y) {
+        AgentEventDto event = AgentEventDto.builder()
+                .roomId(roomId)
+                .agentExternalId(agent.getExternalId())
+                .eventType("state_change")
+                .state(state)
+                .x(x)
+                .y(y)
+                .timestamp(Instant.now().toString())
+                .build();
+        messagingTemplate.convertAndSend("/topic/rooms/" + roomId, event);
+    }
+
+    private int randomStep() {
+        return ThreadLocalRandom.current().nextInt(-1, 2); // -1, 0, or 1
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     public void saveAndBroadcastAgentMessage(MessageDto agentMsg) {

@@ -24,6 +24,9 @@ public class TaskEntity {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    @Column(columnDefinition = "TEXT")
+    private String result;
+
     @Column(nullable = false)
     private String status; // PENDING, IN_PROGRESS, DONE, FAILED
 

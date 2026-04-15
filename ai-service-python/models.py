@@ -90,3 +90,15 @@ class ContainerEvent(BaseModel):
     stderr: str = ""
     timedOut: bool = False
     timestamp: str = ""
+
+
+class AgentAction(BaseModel):
+    """An agent tool invocation event — published to Redis for UI visualization."""
+    roomId: int
+    agentExternalId: str
+    actionType: str       # web_fetch | exec | file_read | file_write | thinking | tool_call
+    toolName: str
+    status: str           # started | completed | failed
+    params: dict = {}
+    result: str | None = None
+    timestamp: str = ""

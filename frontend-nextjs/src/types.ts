@@ -87,3 +87,21 @@ export interface ContainerEvent {
   timedOut: boolean;
   timestamp: string;
 }
+
+export interface AgentAction {
+  roomId: number;
+  agentExternalId: string;
+  actionType: string;
+  toolName: string;
+  status: "started" | "completed" | "failed";
+  params: Record<string, unknown>;
+  result: string | null;
+  timestamp: string;
+}
+
+export interface ChatStreamChunk {
+  roomId: number;
+  agentExternalId: string;
+  chunk: string;
+  timestamp: string;
+}

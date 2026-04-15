@@ -1,6 +1,6 @@
 "use client";
 
-import type { Room } from "@/types";
+import type { Room, AgentAction } from "@/types";
 import PixelAgent from "./PixelAgent";
 
 const CELL = 64;
@@ -11,7 +11,7 @@ const bgColors: Record<string, string> = {
   creative: "#2e1065",
 };
 
-export default function Office({ room }: { room: Room }) {
+export default function Office({ room, agentActions }: { room: Room; agentActions?: AgentAction[] }) {
   const bg = bgColors[room.theme] || "#1e293b";
 
   return (
@@ -41,9 +41,18 @@ export default function Office({ room }: { room: Room }) {
         })}
 
         {/* agents */}
-        {room.agents.map((agent) => (
-          <PixelAgent key={agent.externalId} agent={agent} />
-        ))}
+        {room.agents.map((agent) => {
+          const latestAction = agentActions
+            ?.filter((a) => a.agentExternalId === agent.externalId && a.status === "started")
+            .at(-1);
+          return (
+            <PixelAgent
+              key={agent.externalId}
+              agent={agent}
+              currentAction={latestAction?.actionType}
+            />
+          );
+        })}
       </div>
     </div>
   );

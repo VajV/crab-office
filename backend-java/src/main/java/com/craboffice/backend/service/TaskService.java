@@ -3,10 +3,8 @@ package com.craboffice.backend.service;
 import com.craboffice.backend.dto.TaskDto;
 import com.craboffice.backend.entity.TaskEntity;
 import com.craboffice.backend.repository.TaskRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -20,8 +18,6 @@ public class TaskService {
 
     private final TaskRepository taskRepository;
     private final SimpMessagingTemplate messagingTemplate;
-    private final StringRedisTemplate redisTemplate;
-    private final ObjectMapper objectMapper;
 
     public TaskDto createTask(Long roomId, String title, String description, String agentExternalId) {
         TaskEntity entity = TaskEntity.builder()
@@ -51,6 +47,18 @@ public class TaskService {
         return dto;
     }
 
+    public TaskDto updateResult(Long taskId, String result) {
+        TaskEntity entity = taskRepository.findById(taskId)
+                .orElseThrow(() -> new RuntimeException("Task not found: " + taskId));
+        entity.setResult(result);
+        entity.setUpdatedAt(Instant.now());
+        entity = taskRepository.save(entity);
+        TaskDto dto = toDto(entity);
+
+        messagingTemplate.convertAndSend("/topic/rooms/" + entity.getRoomId() + "/tasks", dto);
+        return dto;
+    }
+
     public List<TaskDto> getTasks(Long roomId) {
         return taskRepository.findByRoomIdOrderByCreatedAtDesc(roomId)
                 .stream()
@@ -66,6 +74,7 @@ public class TaskService {
                 .title(e.getTitle())
                 .description(e.getDescription())
                 .status(e.getStatus())
+                .result(e.getResult())
                 .createdAt(e.getCreatedAt().toString())
                 .updatedAt(e.getUpdatedAt() != null ? e.getUpdatedAt().toString() : null)
                 .build();

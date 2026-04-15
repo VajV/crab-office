@@ -19,7 +19,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -29,7 +28,6 @@ public class RoomService {
     private final RoomRepository roomRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @Value("${app.ai-service-url}")
     private String aiServiceUrl;
@@ -61,22 +59,6 @@ public class RoomService {
         }
 
         room = roomRepository.save(room);
-
-        // Cache agent info in Redis for the Python agent brain
-        try {
-            List<Map<String, Object>> agentList = room.getAgents().stream()
-                    .map(a -> Map.<String, Object>of(
-                            "externalId", a.getExternalId(),
-                            "name", a.getName(),
-                            "role", a.getRole()))
-                    .toList();
-            redisTemplate.opsForValue().set(
-                    "crab:room:" + room.getId() + ":agents",
-                    objectMapper.writeValueAsString(agentList),
-                    java.time.Duration.ofMinutes(60));
-        } catch (Exception e) {
-            log.warn("Failed to cache agents in Redis", e);
-        }
 
         // 3. Build response
         RoomResponse response = toResponse(room);

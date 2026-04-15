@@ -3,10 +3,12 @@ package com.craboffice.backend.service;
 import com.craboffice.backend.dto.AgentEventDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -37,14 +39,19 @@ public class AgentDispatcher implements MessageListener {
     }
 
     @Configuration
+    @ConditionalOnBean(RedisConnectionFactory.class)
     static class RedisSubscriptionConfig {
         @Bean
         RedisMessageListenerContainer redisContainer(
-                org.springframework.data.redis.connection.RedisConnectionFactory connectionFactory,
-                AgentDispatcher dispatcher) {
+                RedisConnectionFactory connectionFactory,
+                AgentDispatcher dispatcher,
+                AgentActionDispatcher actionDispatcher,
+                ChatStreamDispatcher chatStreamDispatcher) {
             RedisMessageListenerContainer container = new RedisMessageListenerContainer();
             container.setConnectionFactory(connectionFactory);
             container.addMessageListener(dispatcher, new ChannelTopic("crab:agent-events"));
+            container.addMessageListener(actionDispatcher, new ChannelTopic("crab:agent-actions"));
+            container.addMessageListener(chatStreamDispatcher, new ChannelTopic("crab:chat-stream"));
             return container;
         }
     }

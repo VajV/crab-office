@@ -6,7 +6,7 @@ import Office from "@/components/Office";
 import ChatPanel from "@/components/ChatPanel";
 import WorkbenchPanel from "@/components/WorkbenchPanel";
 import { useSocket } from "@/hooks/useSocket";
-import type { Room, AgentEvent, Message, Task, SandboxFileEntry, SandboxFileListResponse, SandboxFileContentResponse, ContainerEvent } from "@/types";
+import type { Room, AgentEvent, Message, Task, SandboxFileEntry, SandboxFileListResponse, SandboxFileContentResponse, ContainerEvent, AgentAction, ChatStreamChunk } from "@/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -25,6 +25,8 @@ export default function RoomPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [containerLogs, setContainerLogs] = useState<ContainerEvent[]>([]);
+  const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
+  const [streamingText, setStreamingText] = useState<string>("");
 
   useEffect(() => {
     if (!roomId || isNaN(roomId)) {
@@ -43,16 +45,18 @@ export default function RoomPage() {
         if (cancelled) return;
         setRoom(roomData);
 
-        const [msgRes, taskRes, containerRes] = await Promise.all([
+        const [msgRes, taskRes, containerRes, actionsRes] = await Promise.all([
           fetch(`${API_URL}/api/rooms/${roomId}/messages`),
           fetch(`${API_URL}/api/rooms/${roomId}/tasks`),
           fetch(`${API_URL}/api/rooms/${roomId}/container/logs`),
+          fetch(`${API_URL}/api/rooms/${roomId}/actions`),
         ]);
 
         if (!cancelled) {
           if (msgRes.ok) setMessages(await msgRes.json());
           if (taskRes.ok) setTasks(await taskRes.json());
           if (containerRes.ok) setContainerLogs(await containerRes.json());
+          if (actionsRes.ok) setAgentActions(await actionsRes.json());
         }
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load room");
@@ -116,6 +120,9 @@ export default function RoomPage() {
 
   const handleMessage = useCallback((msg: Message) => {
     setMessages((prev) => [...prev, msg]);
+    if (msg.senderType === "AGENT") {
+      setStreamingText("");
+    }
     if (msg.senderType === "SYSTEM" && msg.content.startsWith("🔧")) {
       loadFiles();
     }
@@ -125,7 +132,18 @@ export default function RoomPage() {
     setContainerLogs((prev) => [...prev, event]);
   }, []);
 
-  useSocket(room?.id ?? null, handleEvent, handleMessage, handleContainerEvent);
+  const handleAgentAction = useCallback((action: AgentAction) => {
+    setAgentActions((prev) => [...prev, action]);
+    if (action.actionType === "file_write" && action.status === "completed") {
+      loadFiles();
+    }
+  }, [loadFiles]);
+
+  const handleChatStream = useCallback((chunk: ChatStreamChunk) => {
+    setStreamingText((prev) => prev + chunk.chunk);
+  }, []);
+
+  useSocket(room?.id ?? null, handleEvent, handleMessage, handleContainerEvent, handleAgentAction, handleChatStream);
 
   if (loading) {
     return (
@@ -147,8 +165,8 @@ export default function RoomPage() {
   return (
     <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center py-12 px-4 gap-8">
       <a href="/" className="text-sm text-gray-500 hover:text-gray-300 self-start">← Все комнаты</a>
-      <Office room={room} />
-      <ChatPanel roomId={room.id} messages={messages} />
+      <Office room={room} agentActions={agentActions} />
+      <ChatPanel roomId={room.id} messages={messages} streamingText={streamingText} />
       <WorkbenchPanel
         tasks={tasks}
         files={files}
@@ -157,6 +175,7 @@ export default function RoomPage() {
         filesLoading={filesLoading}
         filesError={filesError}
         containerLogs={containerLogs}
+        agentActions={agentActions}
         onSelectFile={handleSelectFile}
         onRefreshFiles={loadFiles}
       />

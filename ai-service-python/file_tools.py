@@ -1,8 +1,10 @@
-"""Sandboxed file tools for agent brain — write, read, list files."""
+"""Sandboxed file tools for agent brain — write, read, list files, run code."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -117,23 +119,80 @@ TOOL_REGISTRY: dict[str, tuple] = {
 
 
 async def run_code(room_id: int, command: str) -> str:
-    """Execute a command inside the room's Docker container."""
-    from container_manager import get_container_manager
+    """Execute a command inside the room sandbox with restrictions."""
+    ALLOWED_COMMANDS = {"python", "python3", "node", "cat", "echo", "ls", "dir"}
+    BLOCKED_PATTERNS = {"rm ", "del ", "curl ", "wget ", "sudo ", "chmod ", "chown "}
 
-    mgr = get_container_manager()
+    parts = command.strip().split()
+    if not parts:
+        return "❌ Пустая команда"
+
+    base_cmd = Path(parts[0]).name.lower()
+    if base_cmd not in ALLOWED_COMMANDS:
+        return f"❌ Команда '{base_cmd}' не разрешена. Доступные: {', '.join(sorted(ALLOWED_COMMANDS))}"
+
+    cmd_lower = command.lower()
+    for blocked in BLOCKED_PATTERNS:
+        if blocked in cmd_lower:
+            return f"❌ Запрещённый паттерн в команде: {blocked.strip()}"
+
+    sandbox = _sandbox_path(room_id)
+    max_output = 10_000  # 10 KB
+
     try:
-        result = await mgr.exec_command(room_id, command)
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            command,
+            shell=True,
+            cwd=str(sandbox),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        stdout = proc.stdout[:max_output] if proc.stdout else ""
+        stderr = proc.stderr[:max_output] if proc.stderr else ""
+        result_parts = []
+        if stdout:
+            result_parts.append(stdout)
+        if stderr:
+            result_parts.append(f"[stderr] {stderr}")
+        result_parts.append(f"(exit code: {proc.returncode})")
+        return "\n".join(result_parts) if result_parts else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "❌ Таймаут: команда не завершилась за 30 секунд"
     except Exception as e:
-        logger.exception("run_code failed for room %d", room_id)
+        logger.exception("run_code failed")
         return f"❌ Ошибка выполнения: {e}"
-
-    if result.timed_out:
-        return f"⏱️ Таймаут: команда не завершилась за {result.exit_code}с"
-
-    icon = "✅" if result.exit_code == 0 else "❌"
-    output = result.stdout.strip() or "(нет вывода)"
-    return f"{icon} exit code {result.exit_code}\n```\n$ {command}\n{output}\n```"
 
 
 # Wire run_code into the registry (needs to be after the function definition)
 TOOL_REGISTRY["run_code"] = (run_code, ["command"], {"developer", "architect"})
+
+
+async def execute_tool(room_id: int, tool_name: str, params: dict, role: str = "developer") -> dict:
+    """Look up a tool in the registry, check permissions, and execute it.
+
+    Returns ``{"status": "completed"|"failed", "result": str}``.
+    """
+    entry = TOOL_REGISTRY.get(tool_name)
+    if entry is None:
+        return {"status": "failed", "result": f"Unknown tool: {tool_name}"}
+
+    fn, required_params, allowed_roles = entry
+    if role not in allowed_roles:
+        return {"status": "failed", "result": f"Role '{role}' is not allowed to use '{tool_name}'"}
+
+    missing = [p for p in required_params if p not in params]
+    if missing:
+        return {"status": "failed", "result": f"Missing params: {', '.join(missing)}"}
+
+    try:
+        if asyncio.iscoroutinefunction(fn):
+            result = await fn(room_id, **params)
+        else:
+            result = fn(room_id, **params)
+        failed = isinstance(result, str) and result.startswith("❌")
+        return {"status": "failed" if failed else "completed", "result": result}
+    except Exception as e:
+        logger.exception("execute_tool failed: %s", tool_name)
+        return {"status": "failed", "result": str(e)}

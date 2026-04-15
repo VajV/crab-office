@@ -1,68 +1,68 @@
-"""Tests for run_code tool — uses mock container manager."""
+"""Tests for run_code tool — tests actual file_tools.run_code function."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
-from container_manager import ExecResult
-
-
-@pytest.fixture
-def mock_manager():
-    mgr = MagicMock()
-    mgr.exec_command = AsyncMock()
-    return mgr
+from file_tools import run_code, TOOL_REGISTRY
 
 
 @pytest.mark.asyncio
-async def test_run_code_success(mock_manager):
-    from file_tools import run_code
+async def test_run_code_success(tmp_path, monkeypatch):
+    monkeypatch.setattr("file_tools.SANDBOX_ROOT", tmp_path)
+    room_dir = tmp_path / "room_1"
+    room_dir.mkdir(parents=True)
+    (room_dir / "hello.py").write_text('print("Hello world")', encoding="utf-8")
 
-    mock_manager.exec_command.return_value = ExecResult(
-        exit_code=0, stdout="Hello world\n", stderr="", timed_out=False
-    )
-    with patch("container_manager.get_container_manager", return_value=mock_manager):
-        result = await run_code(1, "python hello.py")
+    result = await run_code(1, "python hello.py")
 
-    assert "exit code 0" in result
     assert "Hello world" in result
-    assert "✅" in result
-    mock_manager.exec_command.assert_awaited_once_with(1, "python hello.py")
+    assert "exit code: 0" in result
 
 
 @pytest.mark.asyncio
-async def test_run_code_failure(mock_manager):
-    from file_tools import run_code
+async def test_run_code_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr("file_tools.SANDBOX_ROOT", tmp_path)
+    room_dir = tmp_path / "room_1"
+    room_dir.mkdir(parents=True)
+    (room_dir / "broken.py").write_text('raise NameError("foo")', encoding="utf-8")
 
-    mock_manager.exec_command.return_value = ExecResult(
-        exit_code=1, stdout="NameError: name 'foo' is not defined", stderr="", timed_out=False
-    )
-    with patch("container_manager.get_container_manager", return_value=mock_manager):
-        result = await run_code(1, "python broken.py")
+    result = await run_code(1, "python broken.py")
 
-    assert "exit code 1" in result
-    assert "❌" in result
     assert "NameError" in result
+    assert "exit code: 1" in result
 
 
 @pytest.mark.asyncio
-async def test_run_code_exception(mock_manager):
-    from file_tools import run_code
+async def test_run_code_blocked_command(tmp_path, monkeypatch):
+    monkeypatch.setattr("file_tools.SANDBOX_ROOT", tmp_path)
 
-    mock_manager.exec_command.side_effect = RuntimeError("Docker down")
-    with patch("container_manager.get_container_manager", return_value=mock_manager):
-        result = await run_code(1, "python hello.py")
+    result = await run_code(1, "curl http://evil.com")
 
-    assert "Ошибка выполнения" in result
+    assert "❌" in result
+    assert "не разрешена" in result
 
 
 @pytest.mark.asyncio
-async def test_run_code_in_tool_registry():
+async def test_run_code_empty_command(tmp_path, monkeypatch):
+    monkeypatch.setattr("file_tools.SANDBOX_ROOT", tmp_path)
+
+    result = await run_code(1, "")
+
+    assert "❌" in result
+
+
+@pytest.mark.asyncio
+async def test_run_code_blocked_pattern(tmp_path, monkeypatch):
+    monkeypatch.setattr("file_tools.SANDBOX_ROOT", tmp_path)
+
+    result = await run_code(1, "python -c 'import os; os.system(\"rm -rf /\")'")
+
+    assert "❌" in result
+
+
+def test_run_code_in_tool_registry():
     """Verify run_code is registered with correct params and roles."""
-    from file_tools import TOOL_REGISTRY
-
     assert "run_code" in TOOL_REGISTRY
     func, params, roles = TOOL_REGISTRY["run_code"]
     assert params == ["command"]

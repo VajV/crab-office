@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Client } from "@stomp/stompjs";
-import type { AgentEvent, Message, ContainerEvent } from "@/types";
+import type { AgentEvent, Message, ContainerEvent, AgentAction, ChatStreamChunk } from "@/types";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080/ws";
 
@@ -11,6 +11,8 @@ export function useSocket(
   onEvent: (event: AgentEvent) => void,
   onMessage?: (msg: Message) => void,
   onContainerEvent?: (event: ContainerEvent) => void,
+  onAgentAction?: (action: AgentAction) => void,
+  onChatStream?: (chunk: ChatStreamChunk) => void,
 ) {
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
@@ -18,6 +20,10 @@ export function useSocket(
   onMessageRef.current = onMessage;
   const onContainerRef = useRef(onContainerEvent);
   onContainerRef.current = onContainerEvent;
+  const onActionRef = useRef(onAgentAction);
+  onActionRef.current = onAgentAction;
+  const onChatStreamRef = useRef(onChatStream);
+  onChatStreamRef.current = onChatStream;
 
   useEffect(() => {
     if (roomId == null) return;
@@ -47,6 +53,22 @@ export function useSocket(
           try {
             const parsed: ContainerEvent = JSON.parse(msg.body);
             onContainerRef.current?.(parsed);
+          } catch {
+            // ignore
+          }
+        });
+        client.subscribe(`/topic/rooms/${roomId}/actions`, (msg) => {
+          try {
+            const parsed: AgentAction = JSON.parse(msg.body);
+            onActionRef.current?.(parsed);
+          } catch {
+            // ignore
+          }
+        });
+        client.subscribe(`/topic/rooms/${roomId}/chat-stream`, (msg) => {
+          try {
+            const parsed: ChatStreamChunk = JSON.parse(msg.body);
+            onChatStreamRef.current?.(parsed);
           } catch {
             // ignore
           }

@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import type { Task, SandboxFileEntry, ContainerEvent } from "@/types";
+import type { Task, SandboxFileEntry, ContainerEvent, AgentAction } from "@/types";
 import FilesPanel from "./FilesPanel";
 import TerminalPanel from "./TerminalPanel";
+import ActionsPanel from "./ActionsPanel";
 
 const statusColors: Record<string, string> = {
   PENDING: "bg-gray-600",
@@ -19,7 +20,7 @@ const statusLabels: Record<string, string> = {
   FAILED: "❌ Ошибка",
 };
 
-type Tab = "tasks" | "files" | "terminal";
+type Tab = "tasks" | "files" | "terminal" | "actions";
 
 interface WorkbenchPanelProps {
   tasks: Task[];
@@ -29,6 +30,7 @@ interface WorkbenchPanelProps {
   filesLoading: boolean;
   filesError: string | null;
   containerLogs: ContainerEvent[];
+  agentActions: AgentAction[];
   onSelectFile: (path: string) => void;
   onRefreshFiles: () => void;
 }
@@ -41,12 +43,15 @@ export default function WorkbenchPanel({
   filesLoading,
   filesError,
   containerLogs,
+  agentActions,
   onSelectFile,
   onRefreshFiles,
 }: WorkbenchPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("tasks");
   const prevLogsLen = useRef(containerLogs.length);
   const [newLogCount, setNewLogCount] = useState(0);
+  const prevActionsLen = useRef(agentActions.length);
+  const [newActionCount, setNewActionCount] = useState(0);
 
   // Auto-switch to terminal on error, track new log badge count
   useEffect(() => {
@@ -61,6 +66,16 @@ export default function WorkbenchPanel({
     }
     prevLogsLen.current = containerLogs.length;
   }, [containerLogs, activeTab]);
+
+  // Track new agent actions badge
+  useEffect(() => {
+    if (agentActions.length > prevActionsLen.current) {
+      if (activeTab !== "actions") {
+        setNewActionCount((c) => c + (agentActions.length - prevActionsLen.current));
+      }
+    }
+    prevActionsLen.current = agentActions.length;
+  }, [agentActions, activeTab]);
 
   return (
     <div className="w-full max-w-lg bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
@@ -101,6 +116,24 @@ export default function WorkbenchPanel({
           {newLogCount > 0 && activeTab !== "terminal" && (
             <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
               {newLogCount}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => { setActiveTab("actions"); setNewActionCount(0); }}
+          className={`flex-1 px-3 py-2 text-sm font-medium relative ${
+            activeTab === "actions"
+              ? "text-orange-400 border-b-2 border-orange-400"
+              : "text-gray-400 hover:text-gray-200"
+          }`}
+        >
+          🔧 Действия
+          {agentActions.some((a) => a.status === "started") && (
+            <span className="ml-1 inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+          )}
+          {newActionCount > 0 && activeTab !== "actions" && (
+            <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+              {newActionCount}
             </span>
           )}
         </button>
@@ -147,6 +180,10 @@ export default function WorkbenchPanel({
 
       {activeTab === "terminal" && (
         <TerminalPanel logs={containerLogs} />
+      )}
+
+      {activeTab === "actions" && (
+        <ActionsPanel actions={agentActions} />
       )}
     </div>
   );

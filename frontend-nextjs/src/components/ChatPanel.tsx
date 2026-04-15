@@ -8,16 +8,17 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 interface ChatPanelProps {
   roomId: number;
   messages: Message[];
+  streamingText?: string;
 }
 
-export default function ChatPanel({ roomId, messages }: ChatPanelProps) {
+export default function ChatPanel({ roomId, messages, streamingText }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, streamingText]);
 
   const send = async () => {
     const text = input.trim();
@@ -68,6 +69,12 @@ export default function ChatPanel({ roomId, messages }: ChatPanelProps) {
             {m.content}
           </div>
         ))}
+        {streamingText && (
+          <div className="text-sm px-3 py-2 rounded-lg max-w-[85%] whitespace-pre-wrap bg-gray-800 text-gray-200 animate-pulse">
+            <span className="text-xs text-gray-400 block mb-0.5">🤖 печатает…</span>
+            {streamingText}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 

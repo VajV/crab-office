@@ -9,6 +9,7 @@ public class TaskDto {
     private String assignedAgentExternalId;
     private String title;
     private String description;
+    private String result;
     private String status;
     private String createdAt;
     private String updatedAt;

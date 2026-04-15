@@ -19,9 +19,19 @@ const stateLabels: Record<string, string> = {
   typing: "⌨️",
 };
 
-export default function PixelAgent({ agent }: { agent: Agent }) {
+export default function PixelAgent({ agent, currentAction }: { agent: Agent; currentAction?: string }) {
   const color = stateColors[agent.state] || "#d1d5db";
   const label = stateLabels[agent.state] || "❓";
+
+  const actionIcons: Record<string, string> = {
+    web_fetch: "🌐",
+    exec: "💻",
+    file_read: "📄",
+    file_write: "✍️",
+    file_edit: "📝",
+    thinking: "🧠",
+    tool_call: "🔧",
+  };
 
   return (
     <motion.div
@@ -30,6 +40,12 @@ export default function PixelAgent({ agent }: { agent: Agent }) {
       transition={{ type: "spring", stiffness: 120, damping: 14 }}
       style={{ width: CELL, height: CELL }}
     >
+      {/* action bubble */}
+      {currentAction && actionIcons[currentAction] && (
+        <span className="absolute -top-3 -right-1 text-sm animate-bounce">
+          {actionIcons[currentAction]}
+        </span>
+      )}
       {/* body */}
       <div
         className="w-10 h-10 rounded-sm border-2 border-gray-800 flex items-center justify-center text-lg"

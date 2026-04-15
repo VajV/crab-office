@@ -8,9 +8,9 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: craboffice
-      POSTGRES_USER: crab
-      POSTGRES_PASSWORD: crab_secret
+      POSTGRES_DB: ${POSTGRES_DB:-craboffice}
+      POSTGRES_USER: ${POSTGRES_USER:-crab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -20,6 +20,46 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    networks:
+      - default
+
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: crab-openclaw
+    restart: unless-stopped
+    ports:
+      - "18789:18789"
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-crab-office-dev-token-change-me}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1"
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./openclaw/config:/home/node/.openclaw
+      - ./openclaw/workspace:/home/node/.openclaw/workspace
+    init: true
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind", "lan",
+        "--port", "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - default
 

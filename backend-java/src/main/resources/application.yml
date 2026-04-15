@@ -4,13 +4,17 @@ spring:
 
   datasource:
     url: jdbc:postgresql://localhost:5433/craboffice
-    username: crab
-    password: crab_secret
+    username: ${POSTGRES_USER:crab}
+    password: ${POSTGRES_PASSWORD:crab_secret}
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     open-in-view: false
+
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 0
 
   data:
     redis:
@@ -18,10 +22,14 @@ spring:
       port: 6379
 
 app:
-  ai-service-url: http://localhost:8000
+  ai-service-url: ${AI_SERVICE_URL:http://localhost:8000}
+  openclaw:
+    url: ${OPENCLAW_URL:http://localhost:18789/v1/chat/completions}
+    token: ${OPENCLAW_GATEWAY_TOKEN:crab-office-dev-token-change-me}
+    model: ${OPENCLAW_MODEL:openclaw}
 
 server:
   port: 8080
   error:
     include-message: always
-    include-stacktrace: always
+    include-stacktrace: never
