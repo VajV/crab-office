@@ -18,6 +18,7 @@ from typing import Callable, Optional
 import httpx
 
 from models import AgentAction
+from openclaw_runtime_bridge import publish_simulation_event, set_agent_state
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +83,16 @@ async def chat_stream(
 
     collected: list[str] = []
     emitted_tools: set[str] = set()  # track which heuristic tools we already emitted
+    web_research_started = False
 
     try:
+        await set_agent_state(
+            room_id,
+            agent_external_id,
+            "thinking",
+            status_text="OpenClaw is reasoning about the request",
+        )
+
         async with httpx.AsyncClient(timeout=OPENCLAW_TIMEOUT) as client:
             async with client.stream(
                 "POST",
@@ -147,6 +156,26 @@ async def chat_stream(
                                     )
                                     await on_action(action)
 
+                                    if tool_type in {"web_fetch", "browser"} and not web_research_started:
+                                        web_research_started = True
+                                        await publish_simulation_event(
+                                            room_id,
+                                            "web_research_started",
+                                            agent_external_id,
+                                            state="thinking",
+                                            payload={
+                                                "query": messages[-1].get("content", ""),
+                                                "tool": tool_type,
+                                                "statusText": "Researching the web",
+                                            },
+                                        )
+                                        await set_agent_state(
+                                            room_id,
+                                            agent_external_id,
+                                            "thinking",
+                                            status_text="Researching the web",
+                                        )
+
                     # --- tool_calls in delta (OpenAI format) ---
                     tool_calls = delta.get("tool_calls")
                     if tool_calls and on_action:
@@ -173,11 +202,41 @@ async def chat_stream(
         full_text = "".join(collected)
         if not full_text:
             return None
+        if web_research_started:
+            await publish_simulation_event(
+                room_id,
+                "web_research_finished",
+                agent_external_id,
+                state="working",
+                payload={
+                    "query": messages[-1].get("content", ""),
+                    "summary": full_text[:400],
+                    "statusText": "Research completed",
+                },
+            )
+        await set_agent_state(
+            room_id,
+            agent_external_id,
+            "working",
+            status_text="OpenClaw finished the streaming response",
+        )
         return full_text
 
     except httpx.TimeoutException:
         logger.error("OpenClaw HTTP request timed out after %ds", OPENCLAW_TIMEOUT)
+        await set_agent_state(
+            room_id,
+            agent_external_id,
+            "waiting",
+            status_text="OpenClaw timed out while responding",
+        )
         return None
     except Exception:
         logger.exception("OpenClaw HTTP streaming error")
+        await set_agent_state(
+            room_id,
+            agent_external_id,
+            "waiting",
+            status_text="OpenClaw failed while streaming",
+        )
         return None

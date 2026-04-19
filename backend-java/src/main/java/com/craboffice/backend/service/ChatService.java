@@ -75,8 +75,10 @@ public class ChatService {
                         .collect(Collectors.joining(", "));
 
                 systemPrompt = "Ты — менеджер офиса '" + room.getRoomName() + "'. " +
+                        "Текущая дата: " + Instant.now().toString().substring(0, 10) + ". " +
                         "В комнате работают агенты: " + agentDescriptions + ". " +
-                        "Отвечай на вопросы пользователя, координируй работу агентов.";
+                        "Отвечай на вопросы пользователя, координируй работу агентов. " +
+                        "Используй актуальную информацию и учитывай текущую дату при ответах.";
 
                 // Find manager agent or fall back to first agent
                 manager = room.getAgents().stream()

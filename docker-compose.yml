@@ -10,7 +10,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-craboffice}
       POSTGRES_USER: ${POSTGRES_USER:-crab}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crab_secret}
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -35,10 +35,18 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-crab-office-dev-token-change-me}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1"
+      OPENCLAW_RUNTIME_MODE: "office-runtime"
+      OPENCLAW_HTTP_EGRESS_ALLOWLIST: ${OPENCLAW_HTTP_EGRESS_ALLOWLIST:-*}
+      OPENCLAW_TOOL_TIMEOUT_SECONDS: ${OPENCLAW_TOOL_TIMEOUT_SECONDS:-60}
+      OPENCLAW_BROWSER_ENABLED: ${OPENCLAW_BROWSER_ENABLED:-1}
       TZ: ${TZ:-UTC}
     volumes:
       - ./openclaw/config:/home/node/.openclaw
       - ./openclaw/workspace:/home/node/.openclaw/workspace
+      - ./openclaw/runtime-artifacts:/home/node/.openclaw/runtime-artifacts
+    read_only: true
+    tmpfs:
+      - /tmp
     init: true
     command:
       [
@@ -62,6 +70,7 @@ services:
       start_period: 20s
     networks:
       - default
+      - crab-agent-net
 
 networks:
   default:

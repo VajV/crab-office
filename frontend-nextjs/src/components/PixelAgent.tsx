@@ -54,7 +54,7 @@ export default function PixelAgent({ agent, currentAction }: { agent: Agent; cur
         {label}
       </div>
       {/* name tag */}
-      <span className="mt-0.5 text-[10px] text-white bg-gray-900/70 px-1 rounded truncate max-w-[60px]">
+      <span className="mt-0.5 text-[10px] text-white bg-gray-900/70 px-1 rounded truncate max-w-[60px]" title={agent.statusText || agent.role}>
         {agent.name}
       </span>
     </motion.div>

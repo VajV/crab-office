@@ -19,6 +19,15 @@ from fastapi import FastAPI, HTTPException
 import openclaw_http
 import openclaw_ws
 from agent_logic import move_agent
+from openclaw_runtime_bridge import (
+    assign_task as backend_assign_task,
+    finish_interaction as backend_finish_interaction,
+    move_agent as backend_move_agent,
+    start_interaction as backend_start_interaction,
+    set_agent_state as backend_set_agent_state,
+    spawn_agent as backend_spawn_agent,
+)
+from runtime_command_parser import parse_runtime_command
 from architect import generate_room, get_llm_status
 from file_tools import execute_tool, list_files_structured, read_file_payload
 from models import (
@@ -113,7 +122,21 @@ async def chat(body: dict):
     if not user_message:
         raise HTTPException(status_code=400, detail="No user message in request")
 
-    reply = await openclaw_ws.chat(user_message, system_prompt=system_prompt)
+    room_id = body.get("room_id", 0)
+    agent_external_id = body.get("agent_external_id")
+
+    runtime_command = parse_runtime_command(user_message)
+    if runtime_command:
+        reply = await _execute_runtime_command(room_id, runtime_command)
+        if reply is None:
+            raise HTTPException(status_code=502, detail="Backend command ingress is unavailable")
+    else:
+        reply = await openclaw_ws.chat(
+            user_message,
+            system_prompt=system_prompt,
+            room_id=room_id,
+            agent_external_id=agent_external_id,
+        )
 
     if not reply:
         raise HTTPException(status_code=502, detail="OpenClaw did not return a response")
@@ -168,6 +191,22 @@ async def chat_stream(body: dict):
 
     if not messages:
         raise HTTPException(status_code=400, detail="No messages in request")
+
+    user_message: str = next(
+        (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+        "",
+    )
+
+    runtime_command = parse_runtime_command(user_message)
+    if runtime_command:
+        reply = await _execute_runtime_command(room_id, runtime_command)
+        if reply is None:
+            raise HTTPException(status_code=502, detail="Backend command ingress is unavailable")
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": reply}}
+            ]
+        }
 
     reply = await openclaw_http.chat_stream(
         messages,
@@ -231,3 +270,135 @@ async def execute_room_tool(room_id: int, body: dict):
     await _publish_action(done)
 
     return result
+
+
+@app.post("/rooms/{room_id}/runtime/spawn-agent")
+async def runtime_spawn_agent(room_id: int, body: dict):
+    role = body.get("role", "")
+    name = body.get("name")
+    preferred_location_id = body.get("preferredLocationId")
+    correlation_id = body.get("correlationId")
+    run_id = body.get("runId")
+
+    if not role:
+        raise HTTPException(status_code=400, detail="role is required")
+
+    result = await backend_spawn_agent(
+        room_id,
+        role,
+        name=name,
+        preferred_location_id=preferred_location_id,
+        correlation_id=correlation_id,
+        run_id=run_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=502, detail="Failed to reach backend command ingress")
+    return result
+
+
+@app.post("/rooms/{room_id}/runtime/set-state")
+async def runtime_set_state(room_id: int, body: dict):
+    agent_external_id = body.get("agentExternalId", "")
+    state = body.get("state", "")
+    status_text = body.get("statusText")
+    correlation_id = body.get("correlationId")
+    run_id = body.get("runId")
+
+    if not agent_external_id or not state:
+        raise HTTPException(status_code=400, detail="agentExternalId and state are required")
+
+    result = await backend_set_agent_state(
+        room_id,
+        agent_external_id,
+        state,
+        status_text=status_text,
+        correlation_id=correlation_id,
+        run_id=run_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=502, detail="Failed to reach backend command ingress")
+    return result
+
+
+@app.post("/rooms/{room_id}/runtime/move-agent")
+async def runtime_move_agent_endpoint(room_id: int, body: dict):
+    agent_external_id = body.get("agentExternalId", "")
+    location_id = body.get("locationId", "")
+    x = body.get("x")
+    y = body.get("y")
+    reason = body.get("reason")
+    target_agent_external_id = body.get("targetAgentExternalId")
+    correlation_id = body.get("correlationId")
+    run_id = body.get("runId")
+
+    if not agent_external_id or not location_id or x is None or y is None:
+        raise HTTPException(status_code=400, detail="agentExternalId, locationId, x, y are required")
+
+    result = await backend_move_agent(
+        room_id,
+        agent_external_id,
+        location_id,
+        int(x),
+        int(y),
+        reason=reason,
+        target_agent_external_id=target_agent_external_id,
+        correlation_id=correlation_id,
+        run_id=run_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=502, detail="Failed to reach backend command ingress")
+    return result
+
+
+async def _execute_runtime_command(room_id: int, runtime_command: dict) -> str | None:
+    command_type = runtime_command.get("commandType")
+    payload = runtime_command.get("payload", {})
+
+    if command_type == "spawn_agent":
+        result = await backend_spawn_agent(room_id, payload["role"])
+        if result:
+            return f"Создал нового агента роли {payload['role']}."
+        return None
+
+    if command_type == "assign_task":
+        result = await backend_assign_task(
+            room_id,
+            payload["title"],
+            description=payload.get("description"),
+            role=payload.get("role"),
+        )
+        if result:
+            return f"Назначил задачу: {payload['title']}"
+        return None
+
+    if command_type == "start_interaction":
+        initiator_role = payload.get("initiatorRole")
+        target_role = payload.get("targetRole")
+        if initiator_role and target_role:
+            result = await backend_start_interaction(
+                room_id,
+                f"agent-{initiator_role}-1",
+                f"agent-{target_role}-1",
+                payload.get("interactionType", "discussion"),
+                summary=payload.get("summary"),
+            )
+            if result:
+                return f"Запустил взаимодействие между {initiator_role} и {target_role}."
+        return None
+
+    if command_type == "finish_interaction":
+        initiator_role = payload.get("initiatorRole")
+        target_role = payload.get("targetRole")
+        if initiator_role and target_role:
+            result = await backend_finish_interaction(
+                room_id,
+                f"agent-{initiator_role}-1",
+                f"agent-{target_role}-1",
+                payload.get("interactionType", "discussion"),
+                summary=payload.get("summary"),
+            )
+            if result:
+                return f"Завершил взаимодействие между {initiator_role} и {target_role}."
+        return None
+
+    return None

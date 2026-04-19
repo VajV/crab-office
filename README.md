@@ -27,6 +27,16 @@
 docker compose up -d
 ```
 
+Для локальной dev-среды compose по умолчанию использует:
+
+```env
+POSTGRES_DB=craboffice
+POSTGRES_USER=crab
+POSTGRES_PASSWORD=crab_secret
+```
+
+Если у вас уже есть старая локальная БД от предыдущего прототипа, backend может не стартовать из-за schema drift. В этом случае используйте актуальные Flyway-миграции и dev runbook из `docs/plans/2026-04-18-dev-db-bootstrap.md`.
+
 ### 2. AI-service (Python)
 
 ```bash

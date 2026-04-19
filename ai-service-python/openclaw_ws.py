@@ -13,10 +13,21 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from typing import Optional
 
 import websockets
+
+from openclaw_runtime_bridge import (
+    assign_task as backend_assign_task,
+    finish_interaction as backend_finish_interaction,
+    publish_simulation_event,
+    set_agent_state,
+    spawn_agent as backend_spawn_agent,
+    start_interaction as backend_start_interaction,
+)
+from runtime_command_parser import parse_runtime_command
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +41,8 @@ AGENT_TIMEOUT = int(os.getenv("OPENCLAW_TIMEOUT", "120"))
 async def chat(
     user_message: str,
     system_prompt: Optional[str] = None,
+    room_id: int | None = None,
+    agent_external_id: str | None = None,
 ) -> Optional[str]:
     """Send a message to OpenClaw and return the agent's response text.
 
@@ -38,6 +51,12 @@ async def chat(
     skip device-identity signing for private-network connections.
     """
     logger.info("OpenClaw: connecting to %s", OPENCLAW_WS_URL)
+    parsed_command = parse_runtime_command(user_message)
+    if room_id is not None and parsed_command:
+        result = await _execute_runtime_command(room_id, agent_external_id, parsed_command)
+        if result:
+            return result
+
     try:
         async with websockets.connect(
             OPENCLAW_WS_URL,
@@ -117,7 +136,13 @@ async def chat(
             }))
 
             # ── Step 6: Collect events until agent.wait resolves ──────────
-            return await _collect_response(ws, wait_id, timeout=AGENT_TIMEOUT)
+            return await _collect_response(
+                ws,
+                wait_id,
+                timeout=AGENT_TIMEOUT,
+                room_id=room_id,
+                agent_external_id=agent_external_id,
+            )
 
     except (websockets.exceptions.WebSocketException, OSError) as exc:
         logger.error("OpenClaw WebSocket connection error: %s", exc)
@@ -146,7 +171,13 @@ async def _read_response(ws, req_id: str, timeout: float = 10) -> Optional[dict]
     return None
 
 
-async def _collect_response(ws, wait_id: str, timeout: float = 120) -> Optional[str]:
+async def _collect_response(
+    ws,
+    wait_id: str,
+    timeout: float = 120,
+    room_id: int | None = None,
+    agent_external_id: str | None = None,
+) -> Optional[str]:
     """Drain WebSocket events until agent.wait resolves (or timeout).
 
     Primary signal  : agent.wait `res` → extract text from snapshot
@@ -195,12 +226,16 @@ async def _collect_response(ws, wait_id: str, timeout: float = 120) -> Optional[
                 if role == "assistant" and text:
                     logger.debug("chat.inject assistant: %s…", text[:60])
                     last_assistant = text
+                elif role == "tool" and room_id is not None and agent_external_id:
+                    await _handle_runtime_tool_event(room_id, agent_external_id, payload)
 
             elif event == "session.message":
                 role = payload.get("role", "")
                 text = payload.get("text") or payload.get("content") or ""
                 if role == "assistant" and text:
                     last_assistant = text
+                elif role == "tool" and room_id is not None and agent_external_id:
+                    await _handle_runtime_tool_event(room_id, agent_external_id, payload)
 
             elif event in ("chat.done", "run.done", "session.done", "agent.done"):
                 logger.info("OpenClaw: completion event %s", event)
@@ -212,6 +247,89 @@ async def _collect_response(ws, wait_id: str, timeout: float = 120) -> Optional[
 
     logger.warning("OpenClaw: timeout after %d s — returning last collected text", timeout)
     return last_assistant
+
+
+async def _execute_runtime_command(room_id: int,
+                                   agent_external_id: str | None,
+                                   parsed_command: dict) -> Optional[str]:
+    command_type = parsed_command.get("commandType")
+    payload = parsed_command.get("payload", {})
+
+    if command_type == "spawn_agent":
+        result = await backend_spawn_agent(room_id, payload["role"])
+        if result:
+            return f"Создал нового агента роли {payload['role']}. Он уже появился в офисе."
+        return None
+
+    if command_type == "assign_task":
+        result = await backend_assign_task(
+            room_id,
+            payload["title"],
+            description=payload.get("description"),
+            role=payload.get("role"),
+        )
+        if result:
+            return f"Назначил задачу: {payload['title']}"
+        return None
+
+    if command_type == "start_interaction":
+        initiator = payload.get("initiatorRole")
+        target = payload.get("targetRole")
+        if initiator and target:
+            initiator_external_id = f"agent-{initiator}-1"
+            target_external_id = f"agent-{target}-1"
+            result = await backend_start_interaction(
+                room_id,
+                initiator_external_id,
+                target_external_id,
+                payload.get("interactionType", "discussion"),
+                summary=payload.get("summary"),
+            )
+            if result:
+                return f"Запустил взаимодействие между {initiator} и {target}."
+        return None
+
+    return None
+
+
+async def _handle_runtime_tool_event(room_id: int, agent_external_id: str, payload: dict) -> None:
+    text = (payload.get("text") or payload.get("content") or "").lower()
+    if not text:
+        return
+
+    if re.search(r"web|browser|internet|fetch|search", text, re.IGNORECASE):
+        await publish_simulation_event(
+            room_id,
+            "web_research_started",
+            agent_external_id,
+            state="thinking",
+            payload={
+                "query": text[:200],
+                "tool": "runtime-tool",
+                "statusText": "Researching the web",
+            },
+        )
+        await set_agent_state(room_id, agent_external_id, "thinking", status_text="Researching the web")
+
+    if re.search(r"talk|discussion|coordina", text, re.IGNORECASE):
+        target_agent_external_id = payload.get("targetAgentExternalId") or "agent-copywriter-1"
+        await backend_start_interaction(
+            room_id,
+            agent_external_id,
+            target_agent_external_id,
+            "discussion",
+            summary="Discussing task details",
+        )
+
+    if re.search(r"finished discussion|interaction complete|coordination done", text, re.IGNORECASE):
+        target_agent_external_id = payload.get("targetAgentExternalId") or "agent-copywriter-1"
+        await backend_finish_interaction(
+            room_id,
+            agent_external_id,
+            target_agent_external_id,
+            "discussion",
+            summary="Interaction completed",
+        )
 
 
 def _extract_snapshot_text(snapshot: dict) -> Optional[str]:

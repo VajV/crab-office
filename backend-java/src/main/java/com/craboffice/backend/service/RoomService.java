@@ -3,15 +3,17 @@ package com.craboffice.backend.service;
 import com.craboffice.backend.dto.AiRoomPayload;
 import com.craboffice.backend.dto.CreateRoomRequest;
 import com.craboffice.backend.dto.RoomResponse;
+import com.craboffice.backend.dto.WorldResponse;
 import com.craboffice.backend.entity.AgentEntity;
+import com.craboffice.backend.entity.LocationEntity;
 import com.craboffice.backend.entity.RoomEntity;
 import com.craboffice.backend.repository.RoomRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -19,15 +21,30 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
-@Slf4j
 public class RoomService {
+
+    private static final Logger log = LoggerFactory.getLogger(RoomService.class);
 
     private final RoomRepository roomRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
+    private final SimulationEventService simulationEventService;
+    private final WorldService worldService;
+
+    public RoomService(RoomRepository roomRepository,
+                       SimpMessagingTemplate messagingTemplate,
+                       ObjectMapper objectMapper,
+                       SimulationEventService simulationEventService,
+                       WorldService worldService) {
+        this.roomRepository = roomRepository;
+        this.messagingTemplate = messagingTemplate;
+        this.objectMapper = objectMapper;
+        this.simulationEventService = simulationEventService;
+        this.worldService = worldService;
+    }
 
     @Value("${app.ai-service-url}")
     private String aiServiceUrl;
@@ -37,24 +54,28 @@ public class RoomService {
         AiRoomPayload aiPayload = callAiService(request);
 
         // 2. Persist room and agents
-        RoomEntity room = RoomEntity.builder()
-                .roomName(aiPayload.getRoomName())
-                .theme(aiPayload.getTheme())
-                .layoutWidth(aiPayload.getLayout().getWidth())
-                .layoutHeight(aiPayload.getLayout().getHeight())
-                .backgroundPreset(aiPayload.getLayout().getBackgroundPreset())
-                .build();
+        RoomEntity room = new RoomEntity();
+        room.setRoomName(aiPayload.getRoomName());
+        room.setTheme(aiPayload.getTheme());
+        room.setLayoutWidth(aiPayload.getLayout().getWidth());
+        room.setLayoutHeight(aiPayload.getLayout().getHeight());
+        room.setBackgroundPreset(aiPayload.getLayout().getBackgroundPreset());
+
+        seedLocations(room);
 
         for (AiRoomPayload.Agent a : aiPayload.getAgents()) {
-            AgentEntity agent = AgentEntity.builder()
-                    .externalId(a.getExternalId())
-                    .name(a.getName())
-                    .role(a.getRole())
-                    .posX(a.getPosition().getX())
-                    .posY(a.getPosition().getY())
-                    .state(a.getState())
-                    .room(room)
-                    .build();
+            String locationId = defaultLocationForRole(a.getRole());
+            AgentEntity agent = new AgentEntity();
+            agent.setExternalId(a.getExternalId());
+            agent.setName(a.getName());
+            agent.setRole(a.getRole());
+            agent.setLocationId(locationId);
+            agent.setSpriteKey(defaultSpriteForRole(a.getRole()));
+            agent.setPosX(a.getPosition().getX());
+            agent.setPosY(a.getPosition().getY());
+            agent.setState(a.getState());
+            agent.setStatusText(defaultStatusForState(a.getState()));
+            agent.setRoom(room);
             room.getAgents().add(agent);
         }
 
@@ -63,8 +84,34 @@ public class RoomService {
         // 3. Build response
         RoomResponse response = toResponse(room);
 
+        for (AgentEntity agent : room.getAgents()) {
+            simulationEventService.publish(
+                    room.getId(),
+                    agent.getLocationId(),
+                    agent.getExternalId(),
+                    "agent.spawned",
+                    agent.getState(),
+                    Map.of(
+                            "agent", Map.of(
+                                    "externalId", agent.getExternalId(),
+                                    "name", agent.getName(),
+                                    "role", agent.getRole(),
+                                    "spriteKey", agent.getSpriteKey(),
+                                    "locationId", agent.getLocationId(),
+                                    "x", agent.getPosX(),
+                                    "y", agent.getPosY(),
+                                    "state", agent.getState()
+                            )
+                    ),
+                    null,
+                    null
+            );
+        }
+
         // 4. Notify frontend via WebSocket
         messagingTemplate.convertAndSend("/topic/rooms/" + room.getId(), response);
+        WorldResponse worldResponse = worldService.getWorld(room.getId());
+        messagingTemplate.convertAndSend("/topic/rooms/" + room.getId() + "/world", worldResponse);
 
         return response;
     }
@@ -149,24 +196,128 @@ public class RoomService {
         return normalized + " Office";
     }
 
+    private void seedLocations(RoomEntity room) {
+        room.getLocations().add(buildLocation(
+                room,
+                "marketing-room",
+                "Marketing",
+                "marketing",
+                12,
+                8,
+                "marketing-loft",
+                jsonPoints(List.of(Map.of("x", 2, "y", 5))),
+                jsonPoints(List.of(Map.of("x", 7, "y", 4, "kind", "meeting-desk"))),
+                1
+        ));
+        room.getLocations().add(buildLocation(
+                room,
+                "engineering-room",
+                "Engineering",
+                "engineering",
+                12,
+                8,
+                "engineering-lab",
+                jsonPoints(List.of(Map.of("x", 2, "y", 4))),
+                jsonPoints(List.of(Map.of("x", 8, "y", 3, "kind", "whiteboard"))),
+                2
+        ));
+        room.getLocations().add(buildLocation(
+                room,
+                "ops-room",
+                "Operations",
+                "operations",
+                12,
+                8,
+                "ops-hub",
+                jsonPoints(List.of(Map.of("x", 3, "y", 6))),
+                jsonPoints(List.of(Map.of("x", 9, "y", 2, "kind", "console"))),
+                3
+        ));
+    }
+
+    private LocationEntity buildLocation(RoomEntity room,
+                                         String key,
+                                         String name,
+                                         String kind,
+                                         int width,
+                                         int height,
+                                         String backgroundPreset,
+                                         String spawnPointsJson,
+                                         String interactionPointsJson,
+                                         int sortOrder) {
+        LocationEntity location = new LocationEntity();
+        location.setLocationKey(key);
+        location.setName(name);
+        location.setKind(kind);
+        location.setWidth(width);
+        location.setHeight(height);
+        location.setBackgroundPreset(backgroundPreset);
+        location.setSpawnPointsJson(spawnPointsJson);
+        location.setInteractionPointsJson(interactionPointsJson);
+        location.setSortOrder(sortOrder);
+        location.setRoom(room);
+        return location;
+    }
+
+    private String jsonPoints(List<Map<String, Object>> points) {
+        try {
+            return objectMapper.writeValueAsString(points);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to serialize location points", e);
+        }
+    }
+
+    private String defaultLocationForRole(String role) {
+        String normalized = role == null ? "" : role.trim().toLowerCase();
+        return switch (normalized) {
+            case "seo", "copywriter", "analyst", "designer" -> "marketing-room";
+            case "developer", "architect", "qa" -> "engineering-room";
+            default -> "ops-room";
+        };
+    }
+
+    private String defaultSpriteForRole(String role) {
+        String normalized = role == null ? "worker" : role.trim().toLowerCase();
+        return normalized + "-sprite";
+    }
+
+    private String defaultStatusForState(String state) {
+        if (state == null || state.isBlank()) {
+            return "Waiting for assignment";
+        }
+        return switch (state.toLowerCase()) {
+            case "thinking" -> "Analyzing task";
+            case "walking" -> "Moving through the office";
+            case "working" -> "Working on assigned task";
+            case "talking" -> "Talking to another agent";
+            case "waiting" -> "Waiting for coordination";
+            default -> "Waiting for assignment";
+        };
+    }
+
     private RoomResponse toResponse(RoomEntity room) {
-        return RoomResponse.builder()
-                .id(room.getId())
-                .roomName(room.getRoomName())
-                .theme(room.getTheme())
-                .layout(RoomResponse.LayoutDto.builder()
-                        .width(room.getLayoutWidth())
-                        .height(room.getLayoutHeight())
-                        .backgroundPreset(room.getBackgroundPreset())
-                        .build())
-                .agents(room.getAgents().stream().map(a -> RoomResponse.AgentDto.builder()
-                        .externalId(a.getExternalId())
-                        .name(a.getName())
-                        .role(a.getRole())
-                        .x(a.getPosX())
-                        .y(a.getPosY())
-                        .state(a.getState())
-                        .build()).toList())
-                .build();
+        RoomResponse.LayoutDto layoutDto = new RoomResponse.LayoutDto();
+        layoutDto.setWidth(room.getLayoutWidth());
+        layoutDto.setHeight(room.getLayoutHeight());
+        layoutDto.setBackgroundPreset(room.getBackgroundPreset());
+
+        List<RoomResponse.AgentDto> agents = room.getAgents().stream().map(a -> {
+            RoomResponse.AgentDto dto = new RoomResponse.AgentDto();
+            dto.setExternalId(a.getExternalId());
+            dto.setName(a.getName());
+            dto.setRole(a.getRole());
+            dto.setX(a.getPosX());
+            dto.setY(a.getPosY());
+            dto.setState(a.getState());
+            return dto;
+        }).toList();
+
+        RoomResponse response = new RoomResponse();
+        response.setId(room.getId());
+        response.setRoomName(room.getRoomName());
+        response.setTheme(room.getTheme());
+        response.setLayout(layoutDto);
+        response.setAgents(agents);
+        return response;
     }
 }

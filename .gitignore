@@ -30,3 +30,35 @@ crab_sandbox/
 
 # Local worktrees
 .worktrees/
+
+# Runtime logs and crash dumps
+*.log
+hs_err_pid*
+replay_pid*
+
+# Backend live debug logs
+backend-java/backend-live.out.log
+backend-java/backend-live.err.log
+
+# Frontend and Python local logs
+frontend-nextjs/frontend.log
+python_service.log
+python_service_err.log
+ai-service-python/ai-service.log
+
+# Local recon/debug artifacts
+ai-service-python/_recon_*.py
+ai-service-python/recon_*.txt
+ai-service-python/recon_*.json
+
+# OpenClaw local state
+openclaw/config/.env
+openclaw/config/*.bak
+openclaw/config/logs/
+openclaw/config/memory/
+openclaw/config/identity/
+openclaw/config/agents/main/sessions/
+openclaw/config/sandboxes/
+
+# Misc local research/experimental outputs
+saas-roadmap/

@@ -18,6 +18,11 @@ public class AgentEntity {
     private int posX;
     private int posY;
     private String state;
+    private String locationId;
+    private String spriteKey;
+    private String statusText;
+    private Long currentTaskId;
+    private String targetAgentExternalId;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "room_id")

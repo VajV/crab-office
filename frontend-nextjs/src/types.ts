@@ -9,9 +9,14 @@ export interface Agent {
   externalId: string;
   name: string;
   role: string;
+  spriteKey?: string;
+  locationId?: string;
   x: number;
   y: number;
   state: string;
+  statusText?: string;
+  currentTaskId?: number | null;
+  targetAgentExternalId?: string | null;
 }
 
 export interface Layout {
@@ -26,6 +31,46 @@ export interface Room {
   theme: string;
   layout: Layout;
   agents: Agent[];
+}
+
+export interface WorldPoint {
+  x: number;
+  y: number;
+  kind?: string;
+}
+
+export interface WorldLocation {
+  id: string;
+  name: string;
+  kind: string;
+  width: number;
+  height: number;
+  backgroundPreset: string;
+  spawnPoints: WorldPoint[];
+  interactionPoints: WorldPoint[];
+  sortOrder: number;
+}
+
+export interface SimulationEvent {
+  id: number;
+  eventType: string;
+  locationId: string | null;
+  agentExternalId: string | null;
+  state: string | null;
+  payload: Record<string, unknown>;
+  correlationId: string | null;
+  runId: string | null;
+  timestamp: string;
+}
+
+export interface World {
+  roomId: number;
+  roomName: string;
+  theme: string;
+  locations: WorldLocation[];
+  agents: Agent[];
+  tasks: Task[];
+  recentEvents: SimulationEvent[];
 }
 
 export interface AgentEvent {

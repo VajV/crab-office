@@ -10,4 +10,7 @@ public interface RoomRepository extends JpaRepository<RoomEntity, Long> {
 
 	@EntityGraph(attributePaths = "agents")
 	Optional<RoomEntity> findWithAgentsById(Long id);
+
+	@EntityGraph(attributePaths = {"agents", "locations"})
+	Optional<RoomEntity> findWithAgentsAndLocationsById(Long id);
 }

@@ -4,16 +4,18 @@ import com.craboffice.backend.dto.CreateRoomRequest;
 import com.craboffice.backend.dto.RoomResponse;
 import com.craboffice.backend.service.RoomService;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/rooms")
-@RequiredArgsConstructor
 public class CrabController {
 
     private final RoomService roomService;
+
+    public CrabController(RoomService roomService) {
+        this.roomService = roomService;
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

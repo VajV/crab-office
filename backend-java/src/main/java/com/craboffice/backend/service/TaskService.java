@@ -18,6 +18,7 @@ public class TaskService {
 
     private final TaskRepository taskRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final SimulationEventService simulationEventService;
 
     public TaskDto createTask(Long roomId, String title, String description, String agentExternalId) {
         TaskEntity entity = TaskEntity.builder()
@@ -32,6 +33,20 @@ public class TaskService {
         TaskDto dto = toDto(entity);
 
         messagingTemplate.convertAndSend("/topic/rooms/" + roomId + "/tasks", dto);
+        simulationEventService.publish(
+                roomId,
+                null,
+                agentExternalId,
+                "agent.task_assigned",
+                "working",
+                java.util.Map.of(
+                        "taskId", dto.getId(),
+                        "title", dto.getTitle(),
+                        "description", dto.getDescription() == null ? "" : dto.getDescription()
+                ),
+                null,
+                null
+        );
         return dto;
     }
 
@@ -44,6 +59,21 @@ public class TaskService {
         TaskDto dto = toDto(entity);
 
         messagingTemplate.convertAndSend("/topic/rooms/" + entity.getRoomId() + "/tasks", dto);
+        if ("DONE".equalsIgnoreCase(status)) {
+            simulationEventService.publish(
+                    entity.getRoomId(),
+                    null,
+                    entity.getAssignedAgentExternalId(),
+                    "task.completed",
+                    "idle",
+                    java.util.Map.of(
+                            "taskId", entity.getId(),
+                            "resultSummary", entity.getResult() == null ? entity.getTitle() : entity.getResult()
+                    ),
+                    null,
+                    null
+            );
+        }
         return dto;
     }
 
